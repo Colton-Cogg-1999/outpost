@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=OUTPOST
+GenericName=Chess Analysis
+Comment=Local-first chess analysis studio
+Exec=outpost
+Icon=outpost
+Terminal=false
+Categories=Game;BoardGame;
+Keywords=chess;stockfish;pgn;analysis;puzzles;
+StartupWMClass=outpost

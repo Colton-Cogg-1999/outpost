@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Per-user install (no sudo): binary in ~/.local/bin, launcher and icon in ~/.local/share.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+bin=src-tauri/target/release/outpost
+[ -x "$bin" ] || { echo "Run ./scripts/build first." >&2; exit 1; }
+install -Dm755 "$bin" "$HOME/.local/bin/outpost"
+# The built-in engine sits next to the binary, where OUTPOST looks for it.
+[ -x src-tauri/target/release/outpost-stockfish ] && install -Dm755 src-tauri/target/release/outpost-stockfish "$HOME/.local/bin/outpost-stockfish"
+install -Dm644 src-tauri/icons/icon.png "$HOME/.local/share/icons/hicolor/512x512/apps/outpost.png"
+install -Dm644 src-tauri/icons/128x128.png "$HOME/.local/share/icons/hicolor/128x128/apps/outpost.png"
+sed "s|^Exec=.*|Exec=$HOME/.local/bin/outpost|" pkgbuild/outpost.desktop > "$HOME/.local/share/applications/outpost.desktop"
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+echo "Installed. Launch OUTPOST from your app launcher or run: outpost"

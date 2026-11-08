@@ -1,0 +1,22 @@
+name: Checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: rustup update stable && rustup default stable
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev librsvg2-dev libayatana-appindicator3-dev libdbus-1-dev
+      - run: npm ci
+      - name: Build the built-in engine (pinned source and network)
+        run: |
+          OUTPOST_ENGINE_ARCH=x86-64-sse41-popcnt ./scripts/build-engine
+          echo "OUTPOST_TEST_STOCKFISH=$PWD/src-tauri/binaries/outpost-stockfish-x86_64-unknown-linux-gnu" >> "$GITHUB_ENV"
+      - run: ./scripts/test
+      - run: npx tauri build --no-bundle

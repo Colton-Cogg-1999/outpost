@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Runs every automated test. Tests that drive a real engine use the built-in engine
+# (scripts/build-engine) or OUTPOST_TEST_STOCKFISH=/path/to/engine; they are skipped otherwise.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+# Use the built-in engine for the real-engine tests when it has been built.
+if [ -z "${OUTPOST_TEST_STOCKFISH:-}" ]; then
+  for e in src-tauri/binaries/outpost-stockfish-*; do
+    case "$e" in *.txt) continue ;; esac
+    [ -x "$e" ] && export OUTPOST_TEST_STOCKFISH="$PWD/$e" && break
+  done
+fi
+npx tsc --noEmit
+npx vitest run
+(cd src-tauri && cargo test)

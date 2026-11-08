@@ -1,0 +1,82 @@
+{
+ "games": [
+  {
+   "url": "https://www.chess.com/game/live/1000000001",
+   "pgn": "[Event \"Live Chess\"]\n[Site \"Chess.com\"]\n[Date \"2026.11.01\"]\n[Round \"-\"]\n[White \"TestPlayerA\"]\n[Black \"TestPlayerB\"]\n[Result \"0-1\"]\n[WhiteElo \"1493\"]\n[BlackElo \"1489\"]\n[TimeControl \"180\"]\n[UTCDate \"2026.11.01\"]\n[UTCTime \"13:39:54\"]\n[Termination \"TestPlayerB won by resignation\"]\n[Link \"https://www.chess.com/game/live/1000000001\"]\n\n1. e4 {[%clk 0:02:59.9]} 1... e5 {[%clk 0:02:58.1]} 2. Nf3 {[%clk 0:02:57]} 2... Nc6 3. Bc4 Nd4 4. Nxe5 Qg5 5. Nxf7 Qxg2 6. Rf1 Qxe4+ 7. Be2 Nf3# 0-1\n",
+   "time_control": "180",
+   "end_time": 1793540394,
+   "rated": true,
+   "uuid": "00000000-0000-4000-8000-000000000001",
+   "initial_setup": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+   "fen": "r1b1kbnr/pppp1Npp/8/8/2B1q3/5n2/PPPPBP1P/RNBQKR2 w Qkq - 3 8",
+   "time_class": "blitz",
+   "rules": "chess",
+   "white": {
+    "rating": 1493,
+    "result": "checkmated",
+    "@id": "https://api.chess.com/pub/player/testplayera",
+    "username": "TestPlayerA",
+    "uuid": "a"
+   },
+   "black": {
+    "rating": 1489,
+    "result": "win",
+    "@id": "https://api.chess.com/pub/player/testplayerb",
+    "username": "TestPlayerB",
+    "uuid": "b"
+   }
+  },
+  {
+   "url": "https://www.chess.com/game/live/1000000002",
+   "pgn": "[Event \"Live Chess\"]\n[Site \"Chess.com\"]\n[Date \"2026.11.01\"]\n[Round \"-\"]\n[White \"TestPlayerA\"]\n[Black \"TestPlayerB\"]\n[Result \"0-1\"]\n[WhiteElo \"1493\"]\n[BlackElo \"1489\"]\n[TimeControl \"180\"]\n[UTCDate \"2026.11.01\"]\n[UTCTime \"13:39:54\"]\n[Termination \"TestPlayerB won by resignation\"]\n[Link \"https://www.chess.com/game/live/1000000001\"]\n\n1. e4 {[%clk 0:02:59.9]} 1... e5 {[%clk 0:02:58.1]} 2. Nf3 {[%clk 0:02:57]} 2... Nc6 3. Bc4 Nd4 4. Nxe5 Qg5 5. Nxf7 Qxg2 6. Rf1 Qxe4+ 7. Be2 Nf3# 0-1\n",
+   "time_control": "180",
+   "end_time": 1793540000,
+   "rated": true,
+   "uuid": "00000000-0000-4000-8000-000000000002",
+   "initial_setup": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+   "fen": "r1b1kbnr/pppp1Npp/8/8/2B1q3/5n2/PPPPBP1P/RNBQKR2 w Qkq - 3 8",
+   "time_class": "blitz",
+   "rules": "chess960",
+   "white": {
+    "rating": 1493,
+    "result": "checkmated",
+    "@id": "https://api.chess.com/pub/player/testplayera",
+    "username": "TestPlayerA",
+    "uuid": "a"
+   },
+   "black": {
+    "rating": 1489,
+    "result": "win",
+    "@id": "https://api.chess.com/pub/player/testplayerb",
+    "username": "TestPlayerB",
+    "uuid": "b"
+   }
+  },
+  {
+   "url": "https://www.chess.com/game/daily/1000000003",
+   "pgn": "[Event \"Live Chess\"]\n[Site \"Chess.com\"]\n[Date \"2026.11.01\"]\n[Round \"-\"]\n[White \"TestPlayerA\"]\n[Black \"TestPlayerC\"]\n[Result \"1/2-1/2\"]\n[WhiteElo \"1493\"]\n[BlackElo \"1489\"]\n[TimeControl \"180\"]\n[UTCDate \"2026.11.01\"]\n[UTCTime \"13:39:54\"]\n[Termination \"TestPlayerC won by resignation\"]\n[Link \"https://www.chess.com/game/live/1000000001\"]\n\n1. d4 d5 2. c4 c6 1/2-1/2\n",
+   "time_control": "1/86400",
+   "end_time": 1793000000,
+   "rated": false,
+   "uuid": "00000000-0000-4000-8000-000000000003",
+   "initial_setup": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+   "fen": "r1b1kbnr/pppp1Npp/8/8/2B1q3/5n2/PPPPBP1P/RNBQKR2 w Qkq - 3 8",
+   "time_class": "daily",
+   "rules": "chess",
+   "white": {
+    "rating": 1493,
+    "result": "checkmated",
+    "@id": "https://api.chess.com/pub/player/testplayera",
+    "username": "TestPlayerA",
+    "uuid": "a"
+   },
+   "black": {
+    "rating": 1489,
+    "result": "win",
+    "@id": "https://api.chess.com/pub/player/testplayerb",
+    "username": "TestPlayerB",
+    "uuid": "b"
+   }
+  }
+ ]
+}

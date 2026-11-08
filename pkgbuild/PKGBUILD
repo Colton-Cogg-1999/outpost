@@ -1,0 +1,33 @@
+# Build from a local checkout: cd pkgbuild && makepkg -si
+pkgname=outpost-chess
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Local-first chess analysis studio: built-in Stockfish, game review, tactics from your games, optional AI explanations"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Colton-Cogg-1999/outpost"
+license=('GPL-3.0-or-later' 'AGPL-3.0-or-later')
+depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'hicolor-icon-theme')
+optdepends=('gnome-keyring: store AI API keys in the Secret Service'
+            'ollama: local AI models')
+makedepends=('rust' 'cargo' 'nodejs' 'npm' 'git' 'curl')
+options=('!lto')
+
+build() {
+  cd "$startdir/.."
+  ./scripts/build
+}
+
+package() {
+  cd "$startdir/.."
+  install -Dm755 src-tauri/target/release/outpost "$pkgdir/usr/bin/outpost"
+  install -Dm755 src-tauri/target/release/outpost-stockfish "$pkgdir/usr/bin/outpost-stockfish"
+  install -Dm644 pkgbuild/outpost.desktop "$pkgdir/usr/share/applications/outpost.desktop"
+  install -Dm644 src-tauri/icons/icon.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/outpost.png"
+  install -Dm644 src-tauri/icons/128x128.png "$pkgdir/usr/share/icons/hicolor/128x128/apps/outpost.png"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 THIRD_PARTY_NOTICES.md "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY_NOTICES.md"
+  cp licenses/*.txt "$pkgdir/usr/share/licenses/$pkgname/"
+  for f in COPYING AUTHORS SOURCE; do
+    install -Dm644 "src-tauri/binaries/outpost-stockfish.$f.txt" "$pkgdir/usr/share/licenses/$pkgname/stockfish-$f.txt"
+  done
+}

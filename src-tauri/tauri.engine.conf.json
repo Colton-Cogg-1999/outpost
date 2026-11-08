@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "externalBin": ["binaries/outpost-stockfish"],
+    "resources": {
+      "binaries/outpost-stockfish.COPYING.txt": "licenses/stockfish-COPYING.txt",
+      "binaries/outpost-stockfish.AUTHORS.txt": "licenses/stockfish-AUTHORS.txt",
+      "binaries/outpost-stockfish.SOURCE.txt": "licenses/stockfish-SOURCE.txt"
+    }
+  }
+}

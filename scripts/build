@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Builds the release binary with the interface embedded, plus the built-in engine:
+#   src-tauri/target/release/outpost
+#   src-tauri/target/release/outpost-stockfish   (Stockfish 19 Lite, see scripts/build-engine)
+# Pass --bundle to also produce .deb/.rpm/AppImage packages with the engine inside.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+TRIPLE="$( (command -v rustc >/dev/null && rustc -vV || mise exec -- rustc -vV) | sed -n 's/^host: //p')"
+ENGINE="src-tauri/binaries/outpost-stockfish-$TRIPLE"
+[ -x "$ENGINE" ] || ./scripts/build-engine
+npm ci
+if [ "${1:-}" = "--bundle" ]; then
+  shift
+  npx tauri build --config src-tauri/tauri.engine.conf.json "$@"
+else
+  npx tauri build --no-bundle "$@"
+fi
+install -m 0755 "$ENGINE" src-tauri/target/release/outpost-stockfish
+echo "Built: src-tauri/target/release/outpost (+ outpost-stockfish)"

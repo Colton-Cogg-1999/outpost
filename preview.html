@@ -1,0 +1,22 @@
+<!doctype html>
+<!-- Development preview only: renders the UI in a browser with mocked native calls. Not part of the app build. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OUTPOST — preview</title>
+    <style>
+      html { background: #1d2b26 linear-gradient(160deg, #24352f 0%, #121c18 60%, #0b1210 100%); }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import { installMocks } from '/src/dev/mock.ts';
+      installMocks();
+      const { useStore } = await import('/src/store.ts');
+      window.__outpost = useStore;
+      await import('/src/main.tsx');
+    </script>
+  </body>
+</html>

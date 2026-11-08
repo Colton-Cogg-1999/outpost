@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Builds OUTPOST's built-in engine: Stockfish 19 "Lite", a native build that uses
+# only the small official network (1.1 MB) instead of the ~100 MB default one.
+# Searching with one thread and a 16 MB hash it peaks at about 60 MB of RAM
+# (about 22 MB more per extra thread) instead of ~265 MB; idle it uses ~5 MB.
+#
+# Source: the stockfish.js fork of Stockfish 19 (GPL-3.0), which carries the
+# small-network feature set. It is fetched at a pinned commit, and the network at
+# a pinned SHA-256, so the build is reproducible and nothing unverified is used.
+#
+#   ./scripts/build-engine              # optimise for this machine (ARCH=native)
+#   OUTPOST_ENGINE_ARCH=x86-64-avx2 ./scripts/build-engine   # portable builds
+#
+# Output: src-tauri/binaries/outpost-stockfish-<target triple>
+set -euo pipefail
+
+REPO=https://github.com/nmrugg/stockfish.js
+COMMIT=0dc3d0ac03705353dad6659c0dad4597cdee4021          # stockfish.js 19.0.1, 2026-11-05
+NET=nn-61e7af4bb97d.nnue
+NET_SHA256=61e7af4bb97d51eeeb25d322916f86513b5cd3a827ce189c98c6e31946f99e5b
+NET_URL=https://tests.stockfishchess.org/api/nn/$NET    # the Stockfish project's network server
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+OUT="$ROOT/src-tauri/binaries"
+WORK="${OUTPOST_ENGINE_WORKDIR:-$ROOT/target-engine}"
+ARCH="${OUTPOST_ENGINE_ARCH:-native}"
+
+if command -v rustc >/dev/null; then
+  TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
+elif command -v mise >/dev/null; then
+  TRIPLE="$(mise exec -- rustc -vV | sed -n 's/^host: //p')"
+else
+  echo "rustc is needed to name the binary for Tauri." >&2
+  exit 1
+fi
+DEST="$OUT/outpost-stockfish-$TRIPLE"
+
+for tool in git make curl sha256sum; do
+  command -v "$tool" >/dev/null || { echo "$tool is required." >&2; exit 1; }
+done
+command -v g++ >/dev/null || command -v clang++ >/dev/null || { echo "A C++17 compiler (g++ or clang++) is required." >&2; exit 1; }
+
+mkdir -p "$WORK" "$OUT"
+SRC="$WORK/stockfish.js"
+if [ ! -d "$SRC/.git" ]; then
+  git init -q "$SRC"
+  git -C "$SRC" remote add origin "$REPO"
+fi
+if [ "$(git -C "$SRC" rev-parse -q --verify HEAD 2>/dev/null || true)" != "$COMMIT" ]; then
+  echo "Fetching stockfish.js at $COMMIT…"
+  git -C "$SRC" fetch -q --depth 1 origin "$COMMIT"
+  git -C "$SRC" checkout -q --force FETCH_HEAD
+fi
+[ "$(git -C "$SRC" rev-parse HEAD)" = "$COMMIT" ] || { echo "Checked-out commit does not match the pinned one." >&2; exit 1; }
+git -C "$SRC" reset -q --hard
+git -C "$SRC" clean -qfdx -e "src/$NET"
+
+if ! echo "$NET_SHA256  $SRC/src/$NET" | sha256sum -c --status 2>/dev/null; then
+  echo "Downloading network $NET…"
+  curl -fsSL --proto '=https' --max-time 300 -o "$SRC/src/$NET.part" "$NET_URL"
+  echo "$NET_SHA256  $SRC/src/$NET.part" | sha256sum -c --status || { rm -f "$SRC/src/$NET.part"; echo "Network checksum mismatch." >&2; exit 1; }
+  mv "$SRC/src/$NET.part" "$SRC/src/$NET"
+fi
+
+# Two small source patches (recorded in outpost-stockfish.SOURCE.txt):
+#  1. stockfish.js only builds for WebAssembly at this commit; its native main()
+#     calls `uci.loop()` on a unique_ptr. Use `uci->loop()`.
+#  2. Name the engine "Stockfish 19 Lite". (Passing ENGINE_VERSION through make
+#     cannot carry a space: the Makefile splices it into the compiler command.)
+patch_once() { # file, from, to
+  grep -qF "$2" "$SRC/src/$1" || { echo "Cannot patch $1: '$2' not found (has the source changed?)." >&2; exit 1; }
+  sed -i "s|$2|$3|" "$SRC/src/$1"
+}
+patch_once main.cpp '    uci.loop();' '    uci->loop();'
+patch_once misc.cpp 'constexpr std::string_view version = "19";' 'constexpr std::string_view version = "19 Lite";'
+
+echo "Building Stockfish 19 Lite (ARCH=$ARCH)…"
+COMP_ARGS=()
+command -v g++ >/dev/null || COMP_ARGS=(COMP=clang)
+make -C "$SRC/src" -j"$(nproc 2>/dev/null || echo 4)" build ARCH="$ARCH" LITE_NET=yes "${COMP_ARGS[@]}" >"$WORK/build.log" 2>&1 \
+  || { tail -30 "$WORK/build.log" >&2; echo "Build failed; full log: $WORK/build.log" >&2; exit 1; }
+
+install -m 0755 "$SRC/src/stockfish" "$DEST"
+command -v strip >/dev/null && strip "$DEST" || true
+install -m 0644 "$SRC/Copying.txt" "$OUT/outpost-stockfish.COPYING.txt"
+install -m 0644 "$SRC/AUTHORS" "$OUT/outpost-stockfish.AUTHORS.txt"
+cat >"$OUT/outpost-stockfish.SOURCE.txt" <<EOF
+OUTPOST's built-in engine is Stockfish 19 Lite, built from:
+
+  $REPO (commit $COMMIT)
+  a GPL-3.0 fork of Stockfish (https://github.com/official-stockfish/Stockfish)
+  with a small-network evaluation ("Lite"), compiled natively with
+  make build ARCH=$ARCH LITE_NET=yes
+
+  OUTPOST's changes to that source (see scripts/build-engine):
+    src/main.cpp  native main(): "uci.loop();" -> "uci->loop();" (build fix)
+    src/misc.cpp  version string "19" -> "19 Lite"
+
+  Network: $NET (SHA-256 $NET_SHA256), from $NET_URL
+
+Stockfish is free software under the GNU General Public License v3 (see
+outpost-stockfish.COPYING.txt); its authors are listed in outpost-stockfish.AUTHORS.txt.
+The complete corresponding source is the commit above plus the network file.
+EOF
+
+# Sanity check: the binary must speak UCI and identify itself.
+ID="$(printf 'uci\nquit\n' | "$DEST" | sed -n 's/^id name //p')"
+[ -n "$ID" ] || { echo "The built engine did not answer the UCI handshake." >&2; exit 1; }
+echo "Built $ID → $DEST ($(du -h "$DEST" | cut -f1))"
