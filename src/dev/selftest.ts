@@ -84,7 +84,7 @@ export async function runSelftest() {
         log(`${platform} games view: ${rows.length} rows; first: ${text(rows[0] ?? null).slice(0, 160)}`);
         check(rows.length > before, `${platform}: new games listed after import`);
       }
-      const accounts = text(document.querySelector('main')).match(/grinch|sync/i);
+      const accounts = text(document.querySelector('main')).toLowerCase().includes(cfg.user.toLowerCase());
       log(`accounts section: ${accounts ? 'present' : 'absent'}`);
       const first = document.querySelector('main table tbody tr') as HTMLElement | null;
       first?.click();
