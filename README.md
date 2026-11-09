@@ -23,7 +23,7 @@ There is no account, no server, no subscription and no tracking. Your games, tac
 | **Imports** | Browse completed Lichess or Chess.com games by username and month, 20 rows per page. **Import & open** saves only the chosen game. Lichess game links also work. Existing accounts retain explicit bulk **Sync** in the library. |
 | **Library** | Search, filter by source, speed, result and reviewed state, sort, favourites. Reviews are saved with each game. |
 | **Puzzles** | Twelve built-in basic exercises work offline. Generate and practice current-game puzzles directly on the Analyze board. The Puzzles page also generates a collection from saved games, skipping every completed game (including zero-result scans). Cancelled or edited games remain eligible. |
-| **Agent chat (optional)** | Configure your agent in Settings, then type into the scrollable chat below the board. Nothing is sent automatically. The conversation follows your game and the selected position; suggested moves are validated. |
+| **Agent chat (optional)** | Configure your agent in Settings, then type into the scrollable chat below the board. Nothing is sent automatically. The conversation follows your game and the selected position; suggested moves are validated. In Puzzles, use the right-hand **Ask agent** tab for a separate conversation about that puzzle and its played solution. |
 
 ![Game review](docs/screenshots/review.png)
 

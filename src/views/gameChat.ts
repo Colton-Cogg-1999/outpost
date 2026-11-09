@@ -12,23 +12,27 @@ export interface ChatMessage {
   position?: string;
 }
 interface Conversation { messages: ChatMessage[]; chatId: string | null }
+export type ChatSession = number | string;
 interface ChatState {
-  conversations: Record<number, Conversation>;
-  pending: { session: number; requestId: number; streaming: string } | null;
-  append: (session: number, message: ChatMessage, chatId?: string | null) => void;
+  conversations: Record<string, Conversation>;
+  recent: string[];
+  pending: { session: ChatSession; requestId: number; streaming: string } | null;
+  append: (session: ChatSession, message: ChatMessage, chatId?: string | null) => void;
 }
 // Conversation follows the game while navigating positions and application views.
 // Keep only the eight most recently active sessions in memory.
 export const useGameChat = create<ChatState>((set) => ({
-  conversations: {}, pending: null,
+  conversations: {}, recent: [], pending: null,
   append: (session, message, chatId) => set((s) => {
     const previous = s.conversations[session];
-    const conversations = { ...s.conversations, [session]: {
+    const conversations = { ...s.conversations };
+    delete conversations[session];
+    conversations[session] = {
       messages: [...(previous?.messages ?? []), message],
       chatId: chatId === undefined ? previous?.chatId ?? null : chatId,
-    } };
-    const keys = Object.keys(conversations).map(Number).sort((a, b) => b - a);
-    for (const old of keys.slice(8)) if (old !== s.pending?.session) delete conversations[old];
-    return { conversations };
+    };
+    const keys = [...s.recent.filter((key) => key !== String(session) && conversations[key]), String(session)];
+    for (const old of keys.slice(0, -8)) if (old !== String(s.pending?.session)) delete conversations[old];
+    return { conversations, recent: keys.filter((key) => conversations[key]) };
   }),
 }));

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { Board, type Mark } from '../board/Board';
 import { Icon, Panel } from '../components/ui';
@@ -6,14 +6,14 @@ import { api, errorText } from '../lib/ipc';
 import { playUci, uciLineToSan } from '../chess/position';
 import { mainline } from '../chess/tree';
 import { openGame } from './Games';
-import type { ChatPosition } from './AiPanel';
+import { AiPanel, type ChatPosition } from './AiPanel';
 import { scanText, startCurrentGameScan, stopScan, tacticsChanged } from '../tactics/scan';
 import { basicPuzzles, checkBasic, type PracticePuzzle } from '../tactics/basics';
 
 type Phase = 'loading' | 'setup' | 'solving' | 'wrong' | 'opponent' | 'solved' | 'revealed' | 'empty';
 type Scope = 'basic' | 'library' | 'game';
 interface Play {
-  tactic: PracticePuzzle; fen: string; index: number; last: [string, string] | null;
+  tactic: PracticePuzzle; fen: string; history: string[]; index: number; last: [string, string] | null;
   mistakes: number; hints: number; started: number; recorded: boolean;
   hintSquare: string | null; badSquare: string | null;
 }
@@ -28,6 +28,7 @@ export function PuzzleTrainer({ scope, gameId, embedded = false, onClose, onPosi
   const toast = useStore((s) => s.toast);
   const [play, setPlay] = useState<Play | null>(null);
   const [phase, setPhase] = useState<Phase>('loading');
+  const [tab, setTab] = useState<'puzzle' | 'agent'>('puzzle');
   const recent = useRef<number[]>([]);
   const basicIndex = useRef(0);
   const generation = useRef(0);
@@ -49,14 +50,14 @@ export function PuzzleTrainer({ scope, gameId, embedded = false, onClose, onPosi
       if (request !== generation.current) return;
       if (!tactic) { setPlay(null); setPhase('empty'); return; }
       recent.current = [...recent.current.slice(-4), tactic.id];
-      setPlay({ tactic, fen: tactic.fen, index: tactic.basic ? 0 : 1, last: null, mistakes: 0, hints: 0, started: Date.now(), recorded: false, hintSquare: null, badSquare: null });
+      setPlay({ tactic, fen: tactic.fen, history: [], index: tactic.basic ? 0 : 1, last: null, mistakes: 0, hints: 0, started: Date.now(), recorded: false, hintSquare: null, badSquare: null });
       if (tactic.basic) setPhase('solving');
       else {
         setPhase('setup');
         later(() => {
           const after = playUci(tactic.fen, tactic.moves[0]);
           if (!after) { toast('This puzzle has an invalid starting move.', 'error'); setPhase('empty'); return; }
-          setPlay((p) => p && { ...p, fen: after.fen, last: squares(tactic.moves[0]), started: Date.now() });
+          setPlay((p) => p && { ...p, fen: after.fen, history: [tactic.moves[0]], last: squares(tactic.moves[0]), started: Date.now() });
           setPhase('solving');
         }, 500);
       }
@@ -69,16 +70,17 @@ export function PuzzleTrainer({ scope, gameId, embedded = false, onClose, onPosi
     return () => tacticsChanged.removeEventListener('change', refresh);
   }, [loadNext]);
   const done = phase === 'solved' || phase === 'revealed';
-  useEffect(() => {
-    if (!play || phase === 'loading' || phase === 'empty') { onPosition?.(null); return; }
+  const position = useMemo<ChatPosition | null>(() => {
+    if (!play || phase === 'loading' || phase === 'empty') return null;
     const t = play.tactic;
-    onPosition?.({ fen: play.fen, label: t.basic ? 'Basic chess puzzle' : `Puzzle from ${t.white} vs ${t.black}`, context: {
-      fen: play.fen, startFen: play.fen, historyUci: [], engines: [], review: [],
+    return { fen: play.fen, label: t.basic ? `${t.title} · ${t.solver} to solve` : `Puzzle from ${t.white} vs ${t.black} · ${t.solver} to solve`, context: {
+      fen: play.fen, startFen: t.fen, historyUci: play.history, engines: [], review: [],
       game: t.basic ? null : { white: t.white, black: t.black, date: t.date },
-      tactic: { themes: done ? t.themes : [], solutionUci: [], revealed: done, playedInGame: null },
-      userColor: useStore.getState().playerColor,
-    } });
-  }, [play, phase, done, onPosition]);
+      tactic: { themes: done ? t.themes : [], solutionUci: done ? t.moves.slice(play.index) : [], revealed: done, playedInGame: null },
+      userColor: t.solver,
+    } };
+  }, [play, phase, done]);
+  useEffect(() => { onPosition?.(position); }, [position, onPosition]);
   useEffect(() => () => onPosition?.(null), [onPosition]);
   const record = async (p: Play, solved: boolean) => {
     if (p.recorded || p.tactic.basic) return;
@@ -98,14 +100,14 @@ export function PuzzleTrainer({ scope, gameId, embedded = false, onClose, onPosi
       }
       const after = playUci(p.fen, uci);
       if (!after) return;
-      const next: Play = { ...p, fen: after.fen, index: p.index + 2, last: squares(uci), badSquare: null, hintSquare: null };
+      const next: Play = { ...p, fen: after.fen, history: [...p.history, uci], index: p.index + (verdict.solved ? 1 : 2), last: squares(uci), badSquare: null, hintSquare: null };
       setPlay(next);
       if (verdict.solved) { setPhase('solved'); void record(next, true); }
       else {
         setPhase('opponent');
         later(() => {
           const reply = verdict.reply && playUci(after.fen, verdict.reply);
-          if (reply) setPlay((cur) => cur && { ...cur, fen: reply.fen, last: squares(verdict.reply!) });
+          if (reply) setPlay((cur) => cur && { ...cur, fen: reply.fen, history: [...cur.history, verdict.reply!], last: squares(verdict.reply!) });
           setPhase('solving');
         }, 420);
       }
@@ -118,7 +120,7 @@ export function PuzzleTrainer({ scope, gameId, embedded = false, onClose, onPosi
     let fen = play.fen;
     play.tactic.moves.slice(play.index).forEach((uci, i) => later(() => {
       const after = playUci(fen, uci);
-      if (after) { fen = after.fen; setPlay((p) => p && { ...p, fen, last: squares(uci), hintSquare: null, badSquare: null }); }
+      if (after) { fen = after.fen; setPlay((p) => p && { ...p, fen, history: [...p.history, uci], index: play.index + i + 1, last: squares(uci), hintSquare: null, badSquare: null }); }
     }, (i + 1) * 420));
   };
   const openInGame = async () => {
@@ -146,7 +148,16 @@ export function PuzzleTrainer({ scope, gameId, embedded = false, onClose, onPosi
     </>}
   </div>;
   if (embedded) return <div className="inline-trainer"><div className="row"><span className="label">Puzzle from this game</span><span className="spacer" /><button className="btn small" onClick={onClose}>Back to game</button></div>{board}{controls}</div>;
-  return <div className="puzzle-layout"><div className="center-col">{board}</div><div className="puzzle-side"><Panel title={scope === 'basic' ? 'Basic practice' : 'Puzzles from your games'} collapsible={false}>{controls}</Panel></div></div>;
+  return <div className="puzzle-layout"><div className="center-col">{board}</div><div className="puzzle-side">
+    <div className="tabs" role="tablist" aria-label="Puzzle sidebar">
+      <button id="puzzle-controls-tab" role="tab" aria-controls="puzzle-controls-panel" aria-selected={tab === 'puzzle'} className={tab === 'puzzle' ? 'active' : ''} onClick={() => setTab('puzzle')}>Puzzle</button>
+      <button id="puzzle-agent-tab" role="tab" aria-controls="puzzle-agent-panel" aria-selected={tab === 'agent'} className={tab === 'agent' ? 'active' : ''} onClick={() => setTab('agent')}>Ask agent</button>
+    </div>
+    <div id="puzzle-controls-panel" role="tabpanel" aria-labelledby="puzzle-controls-tab" className="puzzle-tab-panel" hidden={tab !== 'puzzle'}><Panel title={scope === 'basic' ? 'Basic practice' : 'Puzzles from your games'} collapsible={false}>{controls}</Panel></div>
+    <div id="puzzle-agent-panel" role="tabpanel" aria-labelledby="puzzle-agent-tab" className="puzzle-tab-panel" hidden={tab !== 'agent'}>
+      {position && t ? <AiPanel key={`${scope}:${t.id}`} session={`puzzle:${t.id}`} position={position} /> : <p className="dim small">Load a puzzle to discuss it with your agent.</p>}
+    </div>
+  </div></div>;
 }
 
 export function CurrentGamePuzzles({ active, onPractice, disabled = false }: { active: boolean; onPractice: () => void; disabled?: boolean }) {

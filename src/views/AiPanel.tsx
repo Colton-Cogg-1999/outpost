@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
-import { useGameChat, type ChatMessage } from './gameChat';
+import { useGameChat, type ChatMessage, type ChatSession } from './gameChat';
 import { CLASS_LABEL, Icon, Panel } from '../components/ui';
 import { api, errorText, nextJobId } from '../lib/ipc';
 import { header, mainline, movesTo, startFen, type GameTree } from '../chess/tree';
@@ -76,11 +76,11 @@ export function AnswerText({ text, valid, onPlay }: { text: string; valid: Valid
 
 export interface ChatPosition { fen: string; label: string; context: unknown }
 
-export function AiPanel({ position: override }: { position?: ChatPosition | null } = {}) {
+export function AiPanel({ position: override, session: chatSession }: { position?: ChatPosition | null; session?: ChatSession } = {}) {
   const s = useStore();
   const node = s.tree.nodes[s.current];
   const chat = useGameChat();
-  const session = s.analysisSession;
+  const session = chatSession ?? s.analysisSession;
   const conversation = chat.conversations[session];
   const thread = conversation?.messages ?? [];
   const busy = chat.pending?.requestId ?? null;

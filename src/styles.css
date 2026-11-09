@@ -829,3 +829,14 @@ input:not([type=checkbox]):not([type=range]), select, textarea { background: #1e
 
 .practice-page .puzzle-status { font: 500 18px/1.4 var(--font-pixel); letter-spacing: 0; }
 .practice-page .puzzle-controls .btn { min-height: 36px; height: auto; font-size: 14px; padding: 6px 10px; }
+.puzzle-side > .tabs { flex: none; }
+.puzzle-tab-panel { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.puzzle-tab-panel[hidden] { display: none; }
+.puzzle-tab-panel > .ai-panel { flex: 1; min-height: 280px; overflow: hidden; }
+.puzzle-side .ai-body { flex: 1; min-height: 0; overflow: hidden; }
+.puzzle-side .ai-thread { flex: 1; max-height: none; min-height: 0; overscroll-behavior: contain; }
+.puzzle-side .chat-empty { flex: 1; }
+@media (max-width: 850px) {
+  .practice-page .puzzle-layout { flex: none; }
+  .puzzle-side { flex: none; height: 480px; min-height: 0; }
+}

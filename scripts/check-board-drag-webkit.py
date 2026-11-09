@@ -50,12 +50,12 @@ def begin(data):
  GLib.timeout_add(150,move)
 
 def puzzle_ready():
- js("(()=>{const r=document.querySelector('.board').getBoundingClientRect(),a=document.querySelector('.puzzle-layout > .center-col').getBoundingClientRect(),c=document.querySelector('.batch-puzzles').getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,aw:a.width,ah:a.height,footer:c.top,bottom:c.bottom,viewport:innerHeight}})()",puzzle_measured);return False
+ js("(()=>{const r=document.querySelector('.board').getBoundingClientRect(),a=document.querySelector('.puzzle-layout > .center-col').getBoundingClientRect(),c=document.querySelector('.batch-puzzles').getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,aw:a.width,ah:a.height,footer:c.top,bottom:c.bottom,viewport:innerHeight,stacked:getComputedStyle(document.querySelector('.puzzle-layout')).display==='flex'}})()",puzzle_measured);return False
 
 def puzzle_measured(r):
  global failed
  print('Native puzzle geometry:',json.dumps(r),flush=True)
- failed=r['w']<min(r['aw'],r['ah'])-35 or abs(r['w']-r['h'])>1 or r['y']+r['h']>r['footer'] or r['bottom']>r['viewport']+1
+ failed=r['w']<min(r['aw'],r['ah'])-35 or abs(r['w']-r['h'])>1 or r['y']+r['h']>r['footer'] or (not r['stacked'] and r['bottom']>r['viewport']+1)
  if failed:print('FAIL puzzle sizing',flush=True);Gtk.main_quit();return
  start=(r['x']+r['w']*4.5/8,r['y']+r['h']*7.5/8)
  end=(start[0],r['y']+r['h']*.5/8)
@@ -72,8 +72,18 @@ def puzzle_measured(r):
   global failed
   failed=status!='Solved!'
   print(('FAIL' if failed else 'PASS')+' native puzzle drag/solve: '+status,flush=True)
-  Gtk.main_quit()
+  if failed: Gtk.main_quit()
+  else: js("(()=>{document.querySelector('#puzzle-agent-tab').click();return true})()",lambda _:GLib.timeout_add(200,chat_ready))
  GLib.timeout_add(150,move)
+
+def chat_ready():
+ js("(()=>{const c=document.querySelector('#puzzle-agent-panel').getBoundingClientRect(),b=document.querySelector('.board').getBoundingClientRect(),f=document.querySelector('.batch-puzzles').getBoundingClientRect(),i=document.querySelector('#puzzle-agent-panel textarea').getBoundingClientRect();return {viewport:innerWidth,layout:getComputedStyle(document.querySelector('.puzzle-layout')).display,side:document.querySelector('.puzzle-side').getBoundingClientRect().toJSON(),right:c.x>=b.right,bottom:c.bottom,footer:f.top,input:i.bottom,height:i.height,chatHeight:c.height}})()",chat_measured);return False
+
+def chat_measured(r):
+ global failed
+ failed=(r['layout']!='flex' and not r['right']) or r['bottom']>r['footer']+1 or r['input']>r['bottom']+1 or r['height']<40 or r['chatHeight']<250
+ print(('FAIL' if failed else 'PASS')+' native puzzle chat layout: '+json.dumps(r),flush=True)
+ Gtk.main_quit()
 
 def ready():
  js("(()=>{if(!window.__outpost)return null;window.__outpost.getState().setEngineOn(false);const r=document.querySelector('.board').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()",begin);return False

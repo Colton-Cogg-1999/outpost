@@ -166,7 +166,7 @@ pub fn render(ctx: &PositionContext) -> Result<String> {
         out.push('\n');
     }
     if let Some(color) = &ctx.user_color {
-        out.push_str(&format!("The user played {color} in this game.\n"));
+        out.push_str(&format!("The user is analyzing from the {color} side.\n"));
     }
 
     // History: replay from the start to make sure it really leads here.
@@ -183,6 +183,7 @@ pub fn render(ctx: &PositionContext) -> Result<String> {
                 let skip = sans.len().saturating_sub(keep);
                 let start = &positions[skip];
                 let text = numbered(start, &sans[skip..]);
+                out.push_str(&format!("Starting position FEN for these moves: {}\n", chess::to_fen(start)));
                 out.push_str(&format!("Moves so far{}: {text}\n", if skip > 0 { " (most recent)" } else { "" }));
             }
         }
@@ -275,7 +276,7 @@ pub fn render(ctx: &PositionContext) -> Result<String> {
     }
 
     if let Some(tactic) = &ctx.tactic {
-        out.push_str(&format!("\n## TACTIC (generated from the user's own game by OUTPOST, themes: {})\n", tactic.themes.join(", ")));
+        out.push_str(&format!("\n## TACTIC PRACTICE (themes: {})\n", tactic.themes.join(", ")));
         if let Some(played) = tactic.played_in_game.as_deref().and_then(|u| chess::parse_uci(&pos, u).ok()) {
             out.push_str(&format!("In the game, {} was played here instead.\n", chess::san_string(&pos, played)));
         }
@@ -402,6 +403,27 @@ mod tests {
     #[test]
     fn invalid_fen_is_refused() {
         assert!(render(&PositionContext { fen: "garbage".into(), ..Default::default() }).is_err());
+    }
+
+    #[test]
+    fn solved_puzzle_keeps_the_start_and_played_solution_for_explanation() {
+        let start = "6k1/5ppp/8/8/8/8/6PP/4R1K1 w - - 0 1";
+        let moves = vec!["e1e8".to_string()];
+        let positions = chess::replay(Some(start), &moves).unwrap();
+        let ctx = PositionContext {
+            fen: chess::to_fen(positions.last().unwrap()),
+            start_fen: Some(start.into()),
+            history_uci: moves,
+            user_color: Some("white".into()),
+            tactic: Some(TacticContext { revealed: true, themes: vec!["backRankMate".into()], ..Default::default() }),
+            ..Default::default()
+        };
+        let text = render(&ctx).unwrap();
+        assert!(text.contains(&format!("Starting position FEN for these moves: {start}")));
+        assert!(text.contains("Moves so far: 1. Re8#"));
+        assert!(text.contains("TACTIC PRACTICE"));
+        assert!(text.contains("analyzing from the white side"));
+        assert!(!text.contains("user's own game"));
     }
 
     #[test]
