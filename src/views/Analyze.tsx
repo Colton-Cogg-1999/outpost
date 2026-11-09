@@ -3,8 +3,10 @@ import { useStore } from '../store';
 import { Board, type Arrow } from '../board/Board';
 import { Icon } from '../components/ui';
 import { EnginePanel, LinePanel, MoveList, useEngineList } from './AnalyzePanels';
-import { AiPanel } from './AiPanel';
-import { mainline, movesTo, repetitionCount, startFen, toPgn } from '../chess/tree';
+import { GameDock } from './GameDock';
+import { CurrentGamePuzzles, PuzzleTrainer } from './PuzzleTrainer';
+import { AiPanel, type ChatPosition } from './AiPanel';
+import { header, mainline, movesTo, repetitionCount, startFen, toPgn } from '../chess/tree';
 import { moveFromSan, positionFromFen, statusOf, uciOf, uciSquares } from '../chess/position';
 import { api, errorText, nextJobId } from '../lib/ipc';
 import { copyText, openPgnFile, openPgnText, readClipboard, savePgnFile } from '../lib/files';
@@ -13,7 +15,7 @@ import { makeSquare } from 'chessops/util';
 let searchCounter = 0;
 
 /** Keeps the engine(s) analysing whatever position is on the board. */
-function useLiveAnalysis() {
+function useLiveAnalysis(paused = false) {
   const engineOn = useStore((s) => s.engineOn);
   const engineId = useStore((s) => s.engineId);
   const compareId = useStore((s) => s.compareId);
@@ -21,17 +23,21 @@ function useLiveAnalysis() {
   const fen = useStore((s) => s.tree.nodes[s.current]?.fen);
   const multipv = useStore((s) => s.prefs.multipv);
   const depth = useStore((s) => s.prefs.depthLimit);
+  const scanning = useStore((s) => !!s.scan);
   const running = useRef<{ main: string | null; compare: string | null }>({ main: null, compare: null });
 
   useEffect(() => {
+    let cancelled = false;
     const s = useStore.getState();
+    s.setLive(null);
+    s.setCompareLive(null);
     // An engine that is no longer selected must not keep searching an old position.
-    const wanted = { main: engineOn ? engineId : null, compare: engineOn && compareId && compareId !== engineId ? compareId : null };
+    const wanted = { main: engineOn && !scanning ? engineId : null, compare: engineOn && !scanning && compareId && compareId !== engineId ? compareId : null };
     for (const id of [running.current.main, running.current.compare]) {
       if (id && id !== wanted.main && id !== wanted.compare) api.analysisStop(id).catch(() => {});
     }
     running.current = wanted;
-    if (!engineOn || !engineId) {
+    if (!engineOn || !engineId || scanning || paused) {
       api.analysisStop(null).catch(() => {});
       return;
     }
@@ -45,6 +51,7 @@ function useLiveAnalysis() {
       api
         .analysisStart(engineId, request(mainId), (e) => {
           const st = useStore.getState();
+          if (cancelled) return;
           if (e.type === 'error') {
             if (e.searchId === mainId) st.setEngineError(e.message);
             return;
@@ -57,20 +64,20 @@ function useLiveAnalysis() {
           const top = e.snapshot.lines[0];
           if (top) st.setNodeEval(nodeId, top.score, e.snapshot.terminal ? 999 : e.snapshot.depth);
         })
-        .catch((err) => useStore.getState().setEngineError(errorText(err)));
+        .catch((err) => { if (!cancelled) useStore.getState().setEngineError(errorText(err)); });
       if (compareId && compareId !== engineId) {
         const cmpId = ++searchCounter;
         api
           .analysisStart(compareId, request(cmpId), (e) => {
             const st = useStore.getState();
-            if (e.type === 'error') return;
+            if (cancelled || e.type === 'error') return;
             if (e.snapshot.searchId === cmpId && st.current === nodeId) st.setCompareLive(e.snapshot);
           })
           .catch((err) => useStore.getState().toast(`Comparison engine: ${errorText(err)}`, 'error'));
       }
     }, 70);
-    return () => clearTimeout(timer);
-  }, [engineOn, engineId, compareId, current, fen, multipv, depth]);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [engineOn, engineId, compareId, current, fen, multipv, depth, scanning, paused]);
 
   useEffect(() => () => void api.analysisStop(null).catch(() => {}), []);
 }
@@ -78,12 +85,14 @@ function useLiveAnalysis() {
 function useReview() {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const job = useRef<number | null>(null);
+  useEffect(() => () => { if (job.current !== null) void api.cancel(job.current).catch(() => {}); }, []);
   const run = async () => {
     const s = useStore.getState();
     if (job.current !== null) {
       api.cancel(job.current);
       return;
     }
+    if (s.scan) { s.toast('Wait for puzzle generation to finish first.'); return; }
     const line = mainline(s.tree);
     const moves = movesTo(s.tree, line[line.length - 1]);
     if (!moves.length) return;
@@ -94,13 +103,13 @@ function useReview() {
     setProgress({ done: 0, total: moves.length + 1 });
     try {
       const report = await api.reviewStart(id, { engineId: s.engineId, startFen: startFen(s.tree), moves, gameId: s.gameId }, (e) => {
-        if (e.type === 'progress') {
+        if (e.type === 'progress' && useStore.getState().tree === s.tree) {
           setProgress({ done: e.done, total: e.total });
           const ids = mainline(useStore.getState().tree);
           if (ids[e.ply]) useStore.getState().setNodeEval(ids[e.ply], e.score, 1);
         }
       });
-      useStore.getState().setReport(report);
+      if (useStore.getState().tree === s.tree) useStore.getState().setReport(report);
       useStore.getState().toast(`Review complete${s.gameId ? ' and saved with the game' : ''}.`);
     } catch (e) {
       const msg = errorText(e);
@@ -121,7 +130,12 @@ export function Analyze() {
   const [hover, setHover] = useState<string | null>(null);
   const [moveInput, setMoveInput] = useState('');
   const review = useReview();
-  useLiveAnalysis();
+  const [trainingSession, setTrainingSession] = useState<number | null>(null);
+  const training = trainingSession === s.analysisSession;
+  const [puzzlePosition, setPuzzlePosition] = useState<ChatPosition | null>(null);
+  const trainingRef = useRef(training); trainingRef.current = training;
+  useLiveAnalysis(training);
+  useEffect(() => setTrainingSession(null), [s.current, s.analysisSession]);
 
   const pos = useMemo(() => positionFromFen(node.fen), [node.fen]);
   const status = useMemo(() => (pos ? statusOf(pos, repetitionCount(s.tree, s.current)) : null), [pos, s.tree, s.current]);
@@ -147,6 +161,7 @@ export function Analyze() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).closest('input, textarea, select')) return;
+      if (trainingRef.current) { if (e.key === 'Escape') setTrainingSession(null); return; }
       const st = useStore.getState();
       const keys: Record<string, () => void> = {
         ArrowLeft: st.prev,
@@ -211,7 +226,10 @@ export function Analyze() {
 
   return (
     <div className="analyze">
+      <GameDock />
       <div className="center-col">
+        {training ? <PuzzleTrainer key={s.analysisSession} scope="game" gameId={s.gameId} embedded onClose={() => setTrainingSession(null)} onPosition={setPuzzlePosition} /> : <>
+        <div className="player-strip"><span className={`player-dot ${s.orientation === 'white' ? 'black' : 'white'}`} /><span>{header(s.tree, s.orientation === 'white' ? 'Black' : 'White') ?? (s.orientation === 'white' ? 'Black' : 'White')}</span><span className="dim">{header(s.tree, s.orientation === 'white' ? 'BlackElo' : 'WhiteElo') ?? ''}</span></div>
         <div className="board-wrap">
           <Board
             fen={node.fen}
@@ -225,11 +243,15 @@ export function Analyze() {
             coordinates={s.prefs.coordinates}
           />
         </div>
-        <div className="board-bar">
+        <div className="player-strip"><span className={`player-dot ${s.orientation}`} /><span>{header(s.tree, s.orientation === 'white' ? 'White' : 'Black') ?? (s.orientation === 'white' ? 'White' : 'Black')}</span><span className="dim">{header(s.tree, s.orientation === 'white' ? 'WhiteElo' : 'BlackElo') ?? ''}</span><span className="spacer" />
+          <div className="board-navigation">
           <button className="btn small icon-only" onClick={s.first} title="Start (Home)" aria-label="First move"><Icon name="first" /></button>
           <button className="btn small icon-only" onClick={s.prev} title="Back (←)" aria-label="Previous move"><Icon name="prev" /></button>
           <button className="btn small icon-only" onClick={s.next} title="Forward (→)" aria-label="Next move"><Icon name="next" /></button>
           <button className="btn small icon-only" onClick={s.last} title="End (End)" aria-label="Last move"><Icon name="last" /></button>
+          </div>
+          <details className="board-tools"><summary title="Board tools and game files" aria-label="Board tools"><Icon name="settings" /></summary>
+          <div className="board-bar">
           <button className="btn small icon-only" onClick={s.flip} title="Flip board (F)" aria-label="Flip board"><Icon name="flip" /></button>
           <button className={`btn small icon-only ${s.prefs.engineArrows ? 'on' : ''}`} onClick={() => s.setPrefs({ engineArrows: !s.prefs.engineArrows })} title="Engine arrows (A)" aria-pressed={s.prefs.engineArrows} aria-label="Toggle engine arrows"><Icon name="arrow" /></button>
           <form onSubmit={submitMove}>
@@ -237,6 +259,7 @@ export function Analyze() {
           </form>
           {status?.text && <span className="status-text">{status.text}</span>}
           <div className="spacer" />
+
           <button className="btn small ghost" onClick={() => s.newGame()} title="New analysis from the starting position">New</button>
           <button className="btn small ghost" onClick={() => openPgnFile().catch((e) => s.toast(errorText(e), 'error'))} title="Open PGN / FEN file (Ctrl+O)"><Icon name="folder" /></button>
           <button className="btn small ghost" onClick={pasteGame} title="Paste PGN or FEN (Ctrl+V)"><Icon name="paste" /></button>
@@ -244,13 +267,17 @@ export function Analyze() {
           <button className="btn small ghost" onClick={() => copyText(toPgn(s.tree), 'PGN')} title="Copy PGN">PGN</button>
           <button className="btn small ghost" onClick={() => savePgnFile().catch((e) => s.toast(errorText(e), 'error'))} title="Export PGN file"><Icon name="save" /></button>
           <button className="btn small" onClick={saveToLibrary} title="Save to library (Ctrl+S)"><Icon name="games" />{s.gameId ? 'Update' : 'Save'}</button>
+          </div>
+          </details>
         </div>
-        {s.prefs.aiPanel && <AiPanel />}
+        </>}
+        {s.prefs.aiPanel && <AiPanel position={training ? puzzlePosition : null} />}
       </div>
       <div className="right-col">
-        <EnginePanel engines={engines} onHover={setHover} />
-        <LinePanel />
-        <MoveList reviewing={review.progress} onReview={review.run} />
+        {!training && <EnginePanel engines={engines} onHover={setHover} />}
+        {!training && s.prefs.multipv > 1 && <LinePanel />}
+        <MoveList reviewing={review.progress} onReview={() => { setTrainingSession(null); void review.run(); }} />
+        <CurrentGamePuzzles disabled={!!review.progress} active={training} onPractice={() => setTrainingSession(s.analysisSession)} />
       </div>
     </div>
   );

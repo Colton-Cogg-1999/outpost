@@ -93,7 +93,11 @@ export const api = {
   importPgn: (text: string) => mutates(invoke<T.ImportSummary>('games_import_pgn', { text })),
   gameSave: (id: number | null, pgnText: string) => mutates(invoke<number>('game_save', { id, pgnText })),
   gameDelete: (id: number) => mutates(invoke<void>('game_delete', { id })),
+  clearHistory: () => mutates(invoke<number>('games_clear_history')),
   gameFavorite: (id: number, favorite: boolean) => mutates(invoke<void>('game_favorite', { id, favorite })),
+  history: (jobId: number, request: { platform: string; username: string; year: number; month: number; cursor: number | null }) =>
+    invoke<T.HistoryPage>('games_history', { jobId, request }),
+  importSelected: (game: T.HistoryGame) => mutates(invoke<{ id: number; duplicate: boolean }>('game_import_selected', { game })),
   accounts: () => invoke<{ platform: string; username: string; lastSync: number | null; newestGameAt: number | null }[]>('accounts_list'),
   chesscomImport: (jobId: number, options: Record<string, unknown>, onProgress: (p: T.ImportProgress) => void) =>
     mutates(invoke<T.ImportProgress>('chesscom_import', { jobId, options, onProgress: channel(importing(onProgress)) })),

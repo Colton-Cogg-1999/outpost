@@ -4,7 +4,7 @@ import { Icon, Toggle } from '../components/ui';
 import { api, errorText } from '../lib/ipc';
 import type { AiSettings, KeyStatus, ProviderInfo, ProviderStatus } from '../lib/types';
 
-export function AiView() {
+export function AiView({ embedded = false }: { embedded?: boolean }) {
   const toast = useStore((s) => s.toast);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [keys, setKeys] = useState<Record<string, KeyStatus>>({});
@@ -61,10 +61,10 @@ export function AiView() {
   const setCfg = (id: string, patch: Record<string, unknown>) => save({ ...settings, providers: { ...settings.providers, [id]: { ...cfg(id), ...patch } } });
 
   return (
-    <div className="page">
+    <div className={embedded ? 'agent-settings-content' : 'page'}>
       <div className="page-head">
         <div>
-          <h1>AI Assistant</h1>
+          {!embedded && <h1>Agent settings</h1>}
           <p className="lead">
             Optional. Ask why a move is a blunder, what the plans are, or why two engines disagree. The engine and the rules library stay authoritative: the model
             receives validated facts, and any move it suggests is checked before you can play it. Nothing is sent unless you ask a question.

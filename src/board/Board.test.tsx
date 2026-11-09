@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { Board } from './Board';
-import { SPRITES } from './pieces';
 import { START_FEN } from '../chess/position';
 
 afterEach(cleanup);
@@ -60,6 +59,82 @@ describe('Board', () => {
     expect(onMove).toHaveBeenCalledWith('g1f3');
   });
 
+  it('keeps the drag image outside the scaled app and uses viewport coordinates', () => {
+    const { board, at, container } = setup();
+    fireEvent.pointerDown(board, { ...at('e2'), button: 0, pointerId: 1 });
+    fireEvent.pointerMove(board, { ...at('e4'), pointerId: 1 });
+    const ghost = document.querySelector('.drag-ghost') as HTMLElement;
+    expect(ghost.parentElement).toBe(document.body);
+    expect(container.querySelector('.drag-ghost')).toBeNull();
+    expect(ghost.style.left).toBe('200px');
+    expect(ghost.style.top).toBe('200px');
+    expect(ghost.style.width).toBe('50px');
+  });
+
+  it('recognizes a slow drag made entirely of one-pixel movements', () => {
+    const { board, at, onMove } = setup();
+    const start = at('e2'), end = at('e4');
+    fireEvent.pointerDown(board, { ...start, button: 0, pointerId: 1 });
+    for (let y = start.clientY - 1; y >= end.clientY; y--) {
+      fireEvent.pointerMove(board, { clientX: start.clientX, clientY: y, pointerId: 1 });
+    }
+    expect(document.querySelector('.drag-ghost')).not.toBeNull();
+    fireEvent.pointerUp(board, { ...end, button: 0, pointerId: 1 });
+    expect(onMove).toHaveBeenCalledExactlyOnceWith('e2e4');
+    expect(document.querySelector('.drag-ghost')).toBeNull();
+  });
+
+  it.each(['pointerCancel', 'lostPointerCapture'] as const)('cleans up on %s without committing a move', (event) => {
+    const { board, at, onMove, container } = setup();
+    fireEvent.pointerDown(board, { ...at('e2'), button: 0, pointerId: 1 });
+    fireEvent.pointerMove(board, { ...at('e4'), pointerId: 1 });
+    fireEvent[event](board, { pointerId: 1 });
+    fireEvent.pointerUp(board, { ...at('e4'), button: 0, pointerId: 1 });
+    expect(onMove).not.toHaveBeenCalled();
+    expect(document.querySelector('.drag-ghost')).toBeNull();
+    expect(container.querySelector('.sq.selected')).toBeNull();
+  });
+
+  it('captures on the board and ignores another pointer or button', () => {
+    const { board, at, container, onMove } = setup();
+    board.setPointerCapture = vi.fn();
+    const square = container.querySelector('[data-square="e2"]')!;
+    fireEvent.pointerDown(square, { ...at('e2'), button: 0, pointerId: 1 });
+    expect(board.setPointerCapture).toHaveBeenCalledWith(1);
+    fireEvent.pointerMove(board, { ...at('e4'), pointerId: 2 });
+    fireEvent.pointerUp(board, { ...at('e4'), button: 0, pointerId: 2 });
+    fireEvent.pointerUp(board, { ...at('e4'), button: 2, pointerId: 1 });
+    expect(onMove).not.toHaveBeenCalled();
+    fireEvent.pointerMove(board, { ...at('e4'), pointerId: 1 });
+    fireEvent.pointerUp(board, { ...at('e4'), button: 0, pointerId: 1 });
+    expect(onMove).toHaveBeenCalledExactlyOnceWith('e2e4');
+  });
+
+  it('returns an outside-board drop to its origin and allows another drag', () => {
+    const { board, at, onMove, container } = setup();
+    fireEvent.pointerDown(board, { ...at('e2'), button: 0, pointerId: 1 });
+    fireEvent.pointerMove(board, { clientX: 450, clientY: 450, pointerId: 1 });
+    fireEvent.pointerUp(board, { clientX: 450, clientY: 450, button: 0, pointerId: 1 });
+    expect(onMove).not.toHaveBeenCalled();
+    expect(document.querySelector('.drag-ghost')).toBeNull();
+    expect(container.querySelector('.sq.selected')).toBeNull();
+    fireEvent.pointerDown(board, { ...at('e2'), button: 0, pointerId: 1 });
+    fireEvent.pointerMove(board, { ...at('e4'), pointerId: 1 });
+    fireEvent.pointerUp(board, { ...at('e4'), button: 0, pointerId: 1 });
+    expect(onMove).toHaveBeenCalledExactlyOnceWith('e2e4');
+  });
+
+  it.each(['blur', 'escape'])('cancels a held piece on %s', (event) => {
+    const { board, at, onMove } = setup();
+    fireEvent.pointerDown(board, { ...at('e2'), button: 0, pointerId: 1 });
+    fireEvent.pointerMove(board, { ...at('e4'), pointerId: 1 });
+    if (event === 'blur') fireEvent.blur(window);
+    else fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.pointerUp(board, { ...at('e4'), button: 0, pointerId: 1 });
+    expect(onMove).not.toHaveBeenCalled();
+    expect(document.querySelector('.drag-ghost')).toBeNull();
+  });
+
   it('castles by moving the king two squares', () => {
     const { onMove, click } = setup({ fen: 'r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1' });
     click('e1');
@@ -99,14 +174,5 @@ describe('Board', () => {
   it('marks the king in check', () => {
     const { container } = setup({ fen: 'rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3' });
     expect(container.querySelector('.sq.check')?.getAttribute('data-square')).toBe('e1');
-  });
-});
-
-describe('pixel sprites', () => {
-  it('are all 16×16', () => {
-    for (const rows of Object.values(SPRITES)) {
-      expect(rows).toHaveLength(16);
-      for (const r of rows) expect(r).toHaveLength(16);
-    }
   });
 });

@@ -4,6 +4,7 @@
 
 pub mod chesscom;
 pub mod lichess;
+pub mod history;
 
 use anyhow::{anyhow, bail, Result};
 use serde::Serialize;

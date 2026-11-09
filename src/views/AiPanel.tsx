@@ -1,39 +1,14 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
+import { useGameChat, type ChatMessage } from './gameChat';
 import { CLASS_LABEL, Icon, Panel } from '../components/ui';
 import { api, errorText, nextJobId } from '../lib/ipc';
 import { header, mainline, movesTo, startFen, type GameTree } from '../chess/tree';
 import { reviewByNode } from './analysis';
-import type { AiSettings, GameReport, MoveCheck, Snapshot, ValidatedMove } from '../lib/types';
-
-type Action = 'explain' | 'tactics' | 'plans' | 'compare' | 'whynot';
-
-const ACTIONS: { id: Action; label: string; prompt: (ctx: { san?: string; cls?: string; best?: string }) => string }[] = [
-  { id: 'explain', label: 'Explain', prompt: () => 'Explain this position: who stands better and why, the key features (pawn structure, piece activity, king safety), and what each side should be aiming for.' },
-  { id: 'tactics', label: 'Tactics', prompt: () => 'What tactical threats and opportunities exist here, for both sides? Name the motifs (forks, pins, skewers, discovered attacks, loose pieces, back-rank issues) and only mention legal moves.' },
-  { id: 'plans', label: 'Plans', prompt: () => 'What are sensible plans for both sides over the next several moves? Focus on the strategic ideas rather than long variations.' },
-  { id: 'compare', label: 'Compare', prompt: () => 'Compare the candidate moves in the engine lines (and the engines, if there is more than one). Why does each line make sense, and what does the difference in evaluation mean for a human player?' },
-  {
-    id: 'whynot',
-    label: 'Why not?',
-    prompt: ({ san, cls, best }) =>
-      san
-        ? `Why is ${san} ${cls ? `labelled "${cls}"` : 'weaker than the engine’s choice'}${best && best !== san ? `, and why is ${best} better` : ''}? What idea did the move miss?`
-        : 'Why does the engine prefer its top move over the natural-looking alternatives here?',
-  },
-];
-
-interface Msg {
-  role: 'user' | 'assistant';
-  content: string;
-  label?: string;
-  moves?: MoveCheck;
-  provider?: string;
-  error?: boolean;
-}
+import type { AiSettings, GameReport, Snapshot, ValidatedMove } from '../lib/types';
 
 /** Builds the structured context the backend validates and renders for the model. */
-export function positionContext(tree: GameTree, current: string, live: Snapshot | null, compare: Snapshot | null, report: GameReport | null) {
+export function positionContext(tree: GameTree, current: string, live: Snapshot | null, compare: Snapshot | null, report: GameReport | null, userColor: 'white' | 'black' | null = null) {
   const node = tree.nodes[current];
   const engines = [live, compare]
     .filter((s): s is Snapshot => !!s && s.fen === node.fen && !s.terminal)
@@ -80,7 +55,7 @@ export function positionContext(tree: GameTree, current: string, live: Snapshot 
           .filter(Boolean)
       : [],
     tactic: null,
-    userColor: null,
+    userColor,
   };
 }
 
@@ -99,65 +74,60 @@ export function AnswerText({ text, valid, onPlay }: { text: string; valid: Valid
   );
 }
 
-export function AiPanel() {
+export interface ChatPosition { fen: string; label: string; context: unknown }
+
+export function AiPanel({ position: override }: { position?: ChatPosition | null } = {}) {
   const s = useStore();
   const node = s.tree.nodes[s.current];
-  const [threads, setThreads] = useState<Record<string, Msg[]>>({});
-  const [tab, setTab] = useState<Action>('explain');
+  const chat = useGameChat();
+  const session = s.analysisSession;
+  const conversation = chat.conversations[session];
+  const thread = conversation?.messages ?? [];
+  const busy = chat.pending?.requestId ?? null;
+  const here = chat.pending?.session === session;
+  const streaming = here ? chat.pending?.streaming ?? '' : '';
   const [input, setInput] = useState('');
-  const [busy, setBusy] = useState<number | null>(null);
-  const [streaming, setStreaming] = useState('');
   const [settings, setSettings] = useState<AiSettings | null>(null);
-  const chatIds = useRef<Record<string, string | null>>({});
   const threadRef = useRef<HTMLDivElement>(null);
-  const thread = useMemo(() => threads[node.fen] ?? [], [threads, node.fen]);
-  const review = reviewByNode(s.tree, s.report).get(s.current);
+  const followBottom = useRef(true);
+  const fen = override?.fen ?? node.fen;
 
   useEffect(() => {
-    api.aiProviders().then((p) => setSettings(p.settings)).catch(() => setSettings(null));
+    api.aiProviders().then((p) => { setSettings(p.settings); }).catch(() => setSettings(null));
   }, [s.view]);
 
   useEffect(() => {
-    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
+    if (followBottom.current) threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
   }, [thread.length, streaming]);
 
   const ask = async (question: string, label: string | null) => {
     if (busy) return;
-    const fen = node.fen;
+    followBottom.current = true;
     const requestId = nextJobId();
-    setBusy(requestId);
-    setStreaming('');
-    const history = thread.filter((m) => !m.error).map((m) => ({ role: m.role, content: m.content }));
-    const userMsg: Msg = { role: 'user', content: question, label: label ?? undefined };
-    setThreads((t) => ({ ...t, [fen]: [...(t[fen] ?? []), userMsg] }));
+    useGameChat.setState({ pending: { session, requestId, streaming: '' } });
+    const history = thread.filter((m) => !m.error).map((m) => ({ role: m.role, content: `${m.position ? `[${m.position}; FEN ${m.fen}]\n` : ''}${m.content}` }));
+    const position = override?.label ?? (node.san ? `After ${s.tree.nodes[node.parent!].fen.split(' ')[5]}${s.tree.nodes[node.parent!].fen.split(' ')[1] === 'b' ? '…' : '.'} ${node.san}` : 'Starting position');
+    const userMsg: ChatMessage = { role: 'user', content: question, label: label ?? undefined, fen, position };
+    chat.append(session, userMsg);
     try {
       const answer = await api.aiAsk(
         requestId,
         {
           question,
           label,
-          position: positionContext(s.tree, s.current, s.live, s.compare, s.report),
+          position: override?.context ?? positionContext(s.tree, s.current, s.live, s.compare, s.report, s.playerColor),
           history,
-          chatId: chatIds.current[fen] ?? null,
+          chatId: conversation?.chatId ?? null,
         },
-        (delta) => setStreaming((prev) => prev + delta),
+        (delta) => useGameChat.setState((state) => ({ pending: state.pending?.requestId === requestId ? { ...state.pending, streaming: state.pending.streaming + delta } : state.pending })),
       );
-      chatIds.current[fen] = answer.chatId;
-      const msg: Msg = { role: 'assistant', content: answer.text + (answer.cancelled ? '\n\n[stopped]' : ''), moves: answer.moves, provider: [answer.provider, answer.model].filter(Boolean).join(' · ') };
-      setThreads((t) => ({ ...t, [fen]: [...(t[fen] ?? []), msg] }));
+      const msg: ChatMessage = { role: 'assistant', fen, position, content: answer.text + (answer.cancelled ? '\n\n[stopped]' : ''), moves: answer.moves, provider: [answer.provider, answer.model].filter(Boolean).join(' · ') };
+      chat.append(session, msg, answer.chatId);
     } catch (e) {
-      setThreads((t) => ({ ...t, [fen]: [...(t[fen] ?? []), { role: 'assistant', content: errorText(e), error: true }] }));
+      chat.append(session, { role: 'assistant', content: errorText(e), error: true, fen, position });
     } finally {
-      setBusy(null);
-      setStreaming('');
+      useGameChat.setState({ pending: null });
     }
-  };
-
-  const runAction = (a: Action) => {
-    setTab(a);
-    const def = ACTIONS.find((x) => x.id === a)!;
-    const prompt = def.prompt({ san: node.san, cls: review ? CLASS_LABEL[review.classification] : undefined, best: review?.bestSan ?? undefined });
-    ask(prompt, `[${def.label.toUpperCase()}]${a === 'whynot' && node.san ? ` ${node.san}` : ''}`);
   };
 
   const playMove = (m: ValidatedMove) => {
@@ -168,52 +138,32 @@ export function AiPanel() {
   const configured = !!settings?.active;
   const lastAnswer = [...thread].reverse().find((m) => m.role === 'assistant' && !m.error);
 
-  return (
-    <Panel
+  return <Panel
       id="ai"
       className="ai-panel"
       bodyClass="ai-body"
-      title={
-        <div className="tabs" role="toolbar" aria-label="AI quick actions">
-          {ACTIONS.map((a) => (
-            <button key={a.id} className={tab === a.id && thread.length ? 'active' : ''} onClick={() => runAction(a.id)} disabled={!configured || !!busy} title={configured ? `Ask: ${a.prompt({ san: node.san })}` : 'Set up an AI provider first'}>
-              [{a.label}]
-            </button>
-          ))}
-        </div>
-      }
-      right={busy ? <button className="btn small" onClick={() => api.cancel(busy)}><Icon name="stop" />Stop</button> : null}
+      title={<h2><Icon name="ai" />Discuss with agent</h2>}
+      collapsible={false}
+      right={busy ? <button className="btn small" onClick={() => api.cancel(busy)}><Icon name="stop" />Stop</button> : <button className="btn small ghost" onClick={() => s.setView('settings')} aria-label="Configure agent in Settings"><Icon name="settings" /></button>}
     >
-      {!configured && (
-        <p className="dim small">
-          AI explanations are optional and off. OUTPOST works fully without them. To ask questions about positions, choose a provider — your
-          Claude or ChatGPT subscription via their official CLIs, an API key, or a local model with Ollama.{' '}
-          <button className="btn small" onClick={() => s.setView('ai')}>Set up AI</button>
-        </p>
-      )}
-      {configured && thread.length === 0 && !busy && (
-        <p className="dim small">
-          Ask about this position, or use a quick action above. The current FEN, move history, engine lines and review facts are sent to{' '}
-          <b>{settings?.active}</b> only when you ask. Moves in answers are checked against the rules before they can be played.
-        </p>
-      )}
-      {thread.length > 0 && (
-        <div className="ai-thread" ref={threadRef}>
+      {!configured && <button className="agent-setup" onClick={() => s.setView('settings')}>Connect an agent in Settings to start chatting.</button>}
+      {(thread.length > 0 || here) && (
+        <div className="ai-thread" ref={threadRef} role="log" aria-label="Conversation" onScroll={(e) => { const el = e.currentTarget; followBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48; }}>
           {thread.map((m, i) => (
             <div key={i} className={`ai-msg ${m.role}`}>
               {m.role === 'user' ? (
-                <div className="text">› {m.label ?? m.content}</div>
+                <div className="text"><span className="chat-position">{m.position}</span>› {m.label ?? m.content}</div>
               ) : m.error ? (
                 <div className="notice error">{m.content}</div>
               ) : (
                 <>
                   <h4><Icon name="spark" />Position analysis <span className="ai-provider">{m.provider}</span></h4>
-                  <AnswerText text={m.content} valid={[...(m.moves?.keyMoves ?? []), ...(m.moves?.mentioned ?? [])]} onPlay={playMove} />
+                  <AnswerText text={m.content} valid={!override && m.fen === fen ? [...(m.moves?.keyMoves ?? []), ...(m.moves?.mentioned ?? [])] : []} onPlay={playMove} />
                   {m === lastAnswer && (m.moves?.keyMoves.length || m.moves?.rejected.length) ? (
                     <div className="key-ideas">
                       {m.moves!.keyMoves.length > 0 && <span>Key ideas:</span>}
                       {m.moves!.keyMoves.map((k) => (
-                        <button key={k.uci} className="chip" onClick={() => playMove(k)} title="Legal in this position — click to play">{k.san}</button>
+                        <button key={k.uci} disabled={!!override || m.fen !== fen} className="chip" onClick={() => playMove(k)} title="Legal in this position — click to play">{k.san}</button>
                       ))}
                       {m.moves!.rejected.length > 0 && <span className="faint" title="The model named these, but they are not legal here, so they are not playable.">ignored (not legal here): {m.moves!.rejected.join(', ')}</span>}
                     </div>
@@ -222,7 +172,7 @@ export function AiPanel() {
               )}
             </div>
           ))}
-          {busy && (
+          {here && (
             <div className="ai-msg assistant">
               <h4><Icon name="spark" />Thinking<span className="blink">_</span></h4>
               {streaming && <div className="text">{streaming.replace(/\n?KEY MOVES:.*$/s, '')}</div>}
@@ -230,6 +180,7 @@ export function AiPanel() {
           )}
         </div>
       )}
+      {thread.length === 0 && !here && <p className="chat-empty dim small">Ask about the game or the position on the board.</p>}
       <form
         className="ai-input"
         onSubmit={(e) => {
@@ -240,9 +191,10 @@ export function AiPanel() {
           }
         }}
       >
-        <input value={input} onChange={(e) => setInput(e.target.value)} placeholder={configured ? 'Ask about the position, a plan, or a move…' : 'AI is not set up'} disabled={!configured || !!busy} aria-label="Ask the AI assistant" />
+        <textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask about the position, the game, or ideas…" disabled={!configured || !!busy} aria-label="Ask the AI assistant" onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); }
+        }} />
         <button type="submit" disabled={!configured || !!busy || !input.trim()} aria-label="Send"><Icon name="send" /></button>
       </form>
-    </Panel>
-  );
+    </Panel>;
 }

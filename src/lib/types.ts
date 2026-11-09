@@ -231,6 +231,8 @@ export interface ScanProgress {
   total: number;
   found: number;
   finished: boolean;
+  cancelled?: boolean;
+  failed?: number;
 }
 
 export type Strictness = 'personal' | 'lichess';
@@ -303,3 +305,20 @@ export interface AppInfo {
   cores: number;
   engineDefaults: EngineDefaults;
 }
+
+/** A history row is transient; its PGN is saved only when selected. */
+export interface HistoryGame {
+  account?: string | null;
+  source: string;
+  sourceId: string | null;
+  white: string;
+  black: string;
+  whiteElo: number | null;
+  blackElo: number | null;
+  result: string;
+  date: string | null;
+  speed: string | null;
+  timeControl: string | null;
+  pgn: string;
+}
+export interface HistoryPage { games: HistoryGame[]; nextCursor: number | null }

@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OUTPOST reference comparison</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:20px;background:#11191e;color:#e6e7e2;font:14px system-ui}header{max-width:1448px;margin:0 auto 14px;display:flex;align-items:center;gap:20px;flex-wrap:wrap}h1{font-size:16px;margin:0}label{display:flex;align-items:center;gap:10px}input{width:240px;accent-color:#a8c995}p{margin:0;color:#b1b8b5}.comparison{position:relative;max-width:1448px;aspect-ratio:1448/1038;margin:auto;overflow:hidden;border:1px solid #4a5550}.comparison img{position:absolute;width:100%;left:0;top:0}.reference{position:absolute;inset:0;overflow:hidden;clip-path:inset(0 50% 0 0)}.reference img{top:-3.56455%}.divider{position:absolute;top:0;bottom:0;left:50%;border-left:2px solid #b5dda0;pointer-events:none}.badge{position:absolute;top:12px;padding:6px 10px;background:#10171fe6;border-radius:5px;font-size:12px}.left{left:12px}.right{right:12px}
+</style>
+<header><h1>Reference / updated interface</h1><label>Compare <input type="range" min="0" max="100" value="50" aria-label="Reference coverage"></label><p>Aligned at 1448 × 1038. Updated preview uses development game fixtures.</p></header>
+<div class="comparison"><img src="screenshots/analyze.png" alt="Updated OUTPOST interface"><div class="reference"><img src="../OUTPOST%20Chess%20Analysis%20Dashboard.png" alt="Supplied visual reference"></div><div class="divider"></div><span class="badge left">Reference</span><span class="badge right">Updated interface</span></div>
+<script>document.querySelector('input').addEventListener('input',e=>{document.querySelector('.reference').style.clipPath=`inset(0 ${100-e.target.value}% 0 0)`;document.querySelector('.divider').style.left=e.target.value+'%'});</script>
+</html>

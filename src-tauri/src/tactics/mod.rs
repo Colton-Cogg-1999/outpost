@@ -134,7 +134,7 @@ pub fn stats(db: &Db) -> Result<Stats> {
     let now = now();
     Ok(Stats {
         games: one("SELECT COUNT(*) FROM games")?,
-        scanned: one(&format!("SELECT COUNT(*) FROM tactic_scans WHERE version={VERSION}"))?,
+        scanned: one("SELECT COUNT(*) FROM tactic_scans")?,
         tactics: one("SELECT COUNT(*) FROM tactics")?,
         yours: one("SELECT COUNT(*) FROM tactics WHERE owner='you'")?,
         missed: one("SELECT COUNT(*) FROM tactics WHERE owner='you' AND played IS NOT NULL")?,
@@ -271,6 +271,8 @@ pub struct ScanProgress {
     pub total: usize,
     pub found: usize,
     pub finished: bool,
+    pub cancelled: bool,
+    pub failed: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -293,24 +295,29 @@ impl Default for ScanSettings {
 
 /// Newest first, games not yet scanned with this generator version.
 pub fn pending_games(db: &Db, settings: &ScanSettings) -> Result<Vec<i64>> {
-    if !settings.game_ids.is_empty() {
-        return Ok(settings.game_ids.clone());
-    }
     let conn = db.conn();
+    if !settings.game_ids.is_empty() {
+        let mut ids = Vec::new();
+        for id in &settings.game_ids {
+            if ids.contains(id) { continue; }
+            let eligible: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM games g WHERE g.id=?1 AND g.ply_count>=2 AND (?2 OR NOT EXISTS(SELECT 1 FROM tactic_scans s WHERE s.game_id=g.id)))",
+                params![id, settings.rescan], |r| r.get(0),
+            )?;
+            if eligible { ids.push(*id); }
+        }
+        return Ok(ids);
+    }
     let mine = if settings.only_mine {
         " AND (g.account IS NOT NULL OR EXISTS(SELECT 1 FROM accounts a WHERE a.username=g.white COLLATE NOCASE OR a.username=g.black COLLATE NOCASE))"
     } else {
         ""
     };
-    let scanned = if settings.rescan { "" } else { " AND NOT EXISTS(SELECT 1 FROM tactic_scans s WHERE s.game_id=g.id AND s.version=?1)" };
-    let sql = format!("SELECT g.id FROM games g WHERE g.ply_count>=8{scanned}{mine} ORDER BY COALESCE(g.played_at, g.imported_at) DESC LIMIT ?2");
+    let scanned = if settings.rescan { "" } else { " AND NOT EXISTS(SELECT 1 FROM tactic_scans s WHERE s.game_id=g.id)" };
+    let sql = format!("SELECT g.id FROM games g WHERE g.ply_count>=2{scanned}{mine} ORDER BY COALESCE(g.played_at, g.imported_at) DESC LIMIT ?1");
     let mut stmt = conn.prepare(&sql)?;
     let limit = settings.max_games.clamp(1, 10_000) as i64;
-    let ids = if settings.rescan {
-        stmt.query_map(params![limit], |r| r.get(0))?.collect::<rusqlite::Result<Vec<i64>>>()?
-    } else {
-        stmt.query_map(params![VERSION, limit], |r| r.get(0))?.collect::<rusqlite::Result<Vec<i64>>>()?
-    };
+    let ids = stmt.query_map(params![limit], |r| r.get(0))?.collect::<rusqlite::Result<Vec<i64>>>()?;
     Ok(ids)
 }
 
@@ -336,7 +343,7 @@ pub async fn scan_game(
     let moves: Vec<Move> = moves_uci.iter().enumerate().map(|(i, u)| chess::parse_uci(&positions[i], u)).collect::<Result<_>>()?;
 
     // Evaluations: reuse a saved review of this exact game, otherwise review it now.
-    let existing = review::load(db, game_id)?.filter(|r| r.positions.len() == positions.len());
+    let existing = review::load(db, game_id)?.filter(|r| r.positions.len() == positions.len() && r.positions.iter().zip(&positions).all(|(snapshot, pos)| snapshot.fen == chess::to_fen(pos)));
     let report = match existing {
         Some(r) => r,
         None => {
@@ -356,6 +363,7 @@ pub async fn scan_game(
     let mut generator = Generator { engine, limits: limits.clone(), rules: strictness.rules(), cancel };
     let total = moves.len();
     let found = generator.analyze_game(&positions, &moves, &evals, |ply| progress("search", ply, total, 0)).await?;
+    if cancel.load(Ordering::Relaxed) { bail!("cancelled"); }
     let mut saved = 0;
     for f in &found {
         if save_found(db, game_id, &positions, &moves, f, owner)? {
@@ -373,7 +381,7 @@ pub async fn scan_game(
     Ok(saved)
 }
 
-/// Stores a found tactic unless the same position is already a tactic (openings repeat).
+/// Stores a tactic per game: a repeated position must remain available in each game.
 fn save_found(db: &Db, game_id: i64, positions: &[Chess], moves: &[Move], f: &generator::Found, owner: Option<Color>) -> Result<bool> {
     let start = &positions[f.ply];
     let Some(line) = util::Line::new(start.clone(), &f.moves, f.cp) else { return Ok(false) };
@@ -384,13 +392,6 @@ fn save_found(db: &Db, game_id: i64, positions: &[Chess], moves: &[Move], f: &ge
     let played = moves.get(f.ply + 1).map(|m| chess::uci_string(*m)).filter(|p| Some(p) != ucis.get(1));
     let owner = owner.map(|c| if c == solver { "you" } else { "opponent" });
     let conn = db.conn();
-    let duplicate: bool = conn
-        .query_row("SELECT 1 FROM tactics WHERE position_key=?1 AND game_id<>?2 LIMIT 1", params![key, game_id], |_| Ok(()))
-        .optional()?
-        .is_some();
-    if duplicate {
-        return Ok(false);
-    }
     let changed = conn.execute(
         "INSERT INTO tactics(game_id,ply,fen,moves,position_key,solver,kind,cp,themes,owner,played,version,created_at)
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
@@ -467,7 +468,7 @@ mod tests {
     }
 
     #[test]
-    fn identical_positions_from_other_games_are_skipped() {
+    fn repeated_positions_remain_available_in_the_current_game() {
         let db = Db::in_memory().unwrap();
         scholar(&db);
         let other = insert_game(&db, "[White \"x\"]\n[Black \"y\"]\n[Event \"other\"]\n\n1. e4 e5 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7# 1-0", None);
@@ -475,18 +476,43 @@ mod tests {
         let moves: Vec<Move> = ["e2e4", "e7e5", "f1c4", "b8c6", "d1h5", "g8f6"].iter().enumerate().map(|(i, u)| chess::parse_uci(&positions[i], u).unwrap()).collect();
         let mate = chess::parse_uci(&positions[6], "h5f7").unwrap();
         let found = generator::Found { ply: 5, moves: vec![moves[5], mate], kind: "mate", cp: 999_999_999 };
-        assert!(!save_found(&db, other, &positions, &moves, &found, None).unwrap());
+        assert!(save_found(&db, other, &positions, &moves, &found, None).unwrap());
+        assert_eq!(for_game(&db, other).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn editing_the_mainline_invalidates_derived_tactics_and_reviews() {
+        let db = Db::in_memory().unwrap();
+        let (game_id, _) = scholar(&db);
+        db.conn().execute("INSERT INTO analyses(game_id,engine,settings,report,created_at) VALUES(?1,'test','{}','{}',0)", [game_id]).unwrap();
+        db.conn().execute("INSERT INTO tactic_scans(game_id,version,found,scanned_at) VALUES(?1,1,1,0)", [game_id]).unwrap();
+        let old = games::get(&db, game_id).unwrap();
+        // Annotation-only edits should retain training history.
+        let same = pgn::parse_one(&old.pgn).unwrap();
+        games::update_pgn(&db, game_id, &same).unwrap();
+        assert_eq!(for_game(&db, game_id).unwrap().len(), 1);
+        let changed = pgn::parse_one("1. d4 d5 2. c4 e6 3. Nc3 Nf6 4. Bg5 *").unwrap();
+        games::update_pgn(&db, game_id, &changed).unwrap();
+        assert!(for_game(&db, game_id).unwrap().is_empty());
+        let conn = db.conn();
+        for table in ["analyses", "tactic_scans"] {
+            assert_eq!(conn.query_row(&format!("SELECT COUNT(*) FROM {table} WHERE game_id=?1"), [game_id], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        }
     }
 
     #[test]
     fn pending_games_skip_scanned_ones() {
         let db = Db::in_memory().unwrap();
         let (game, _) = scholar(&db);
-        assert_eq!(pending_games(&db, &ScanSettings::default()).unwrap(), vec![] as Vec<i64>, "too short (7 plies) to scan");
+        assert_eq!(pending_games(&db, &ScanSettings::default()).unwrap(), vec![game], "short games can contain mates");
+        db.conn().execute("INSERT INTO tactic_scans(game_id,version,found,scanned_at) VALUES(?1,0,0,0)", [game]).unwrap();
         let long = insert_game(&db, "[White \"me\"]\n[Black \"z\"]\n\n1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 *", Some("me"));
         assert_eq!(pending_games(&db, &ScanSettings::default()).unwrap(), vec![long]);
         db.conn().execute("INSERT INTO tactic_scans(game_id,version,found,scanned_at) VALUES(?1,?2,0,0)", params![long, VERSION]).unwrap();
         assert!(pending_games(&db, &ScanSettings::default()).unwrap().is_empty());
-        let _ = game;
+        // Explicit single-game requests also skip completed zero-result scans,
+        // even when the old scan used a different generator version.
+        assert!(pending_games(&db, &ScanSettings { game_ids: vec![game, long], ..Default::default() }).unwrap().is_empty());
+        assert_eq!(pending_games(&db, &ScanSettings { game_ids: vec![game, game], rescan: true, ..Default::default() }).unwrap(), vec![game]);
     }
 }

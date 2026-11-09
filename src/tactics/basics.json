@@ -1,0 +1,8 @@
+[
+  {"title":"Back-rank mate","theme":"backRankMate","fen":"6k1/5ppp/8/8/8/8/6PP/4R1K1 w - - 0 1","move":"e1e8"},
+  {"title":"The rook ladder","theme":"rookEndgame","fen":"7k/R7/8/8/8/8/8/1R4K1 w - - 0 1","move":"b1b8"},
+  {"title":"Smothered mate","theme":"smotheredMate","fen":"6rk/6pp/7N/8/8/8/8/6K1 w - - 0 1","move":"h6f7"},
+  {"title":"King and queen","theme":"queenEndgame","fen":"7k/8/5KQ1/8/8/8/8/8 w - - 0 1","move":"g6g7"},
+  {"title":"The vulnerable f-pawn","theme":"f2F7","fen":"r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w - - 4 4","move":"h5f7"},
+  {"title":"Rook and knight","theme":"arabianMate","fen":"7k/8/5N2/8/8/8/6R1/6K1 w - - 0 1","move":"g2g8"}
+]

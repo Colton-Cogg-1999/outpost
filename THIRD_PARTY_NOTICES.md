@@ -15,6 +15,12 @@ The audit below was made on 2026-11-07 against the locked dependency tree (`Carg
 
 Packages that include the engine meet GPL-3.0 §6 by pointing to the exact corresponding source: the commit above plus the network file below. `outpost-stockfish.SOURCE.txt` records both.
 
+## Chess pieces
+
+The default board silhouettes in `public/pieces/reference/` are reconstructed as SVG paths from the supplied `OUTPOST Chess Analysis Dashboard.png` visual reference.
+
+The project also includes the Cburnett SVG piece set by Colin M.L. Burnett, obtained from [lichess-org/lila](https://github.com/lichess-org/lila/tree/a1590345c9c3a31b6f9c6705eefeeb7dab32a78e/public/piece/cburnett) at commit `a1590345c9c3a31b6f9c6705eefeeb7dab32a78e`. Lichess records the set as GPLv2 or later in its [COPYING.md](https://github.com/lichess-org/lila/blob/a1590345c9c3a31b6f9c6705eefeeb7dab32a78e/COPYING.md); OUTPOST distributes the SVGs under GPLv3 or later, with cream and charcoal palette adjustments. Their source is in `public/pieces/cburnett/` and the GPLv3 license text is in `LICENSE`.
+
 ## Data
 
 | Data | License | Notes |
@@ -25,10 +31,9 @@ OUTPOST ships no puzzle database. Tactics are generated locally from the user's 
 
 ## Fonts (bundled in the interface)
 
-All three are under the SIL Open Font License 1.1, delivered through Fontsource. Full license texts are in `licenses/`.
+The fonts are under the SIL Open Font License 1.1, delivered through Fontsource. Full license texts are in `licenses/`.
 
-- **Silkscreen**: Copyright 2001 The Silkscreen Project Authors.
-- **VT323**: Copyright 2011, The VT323 Project Authors.
+- **Noto Sans**: Copyright The Noto Project Authors.
 - **IBM Plex Mono**: Copyright 2017 IBM Corp.
 
 ## Rust crates (431, linked into the binary)
@@ -55,13 +60,13 @@ Direct dependencies: `tauri`, `tauri-plugin-dialog`, `tauri-plugin-clipboard-man
 | react 19.3.1, react-dom 19.3.1, scheduler 0.28.0 | MIT |
 | zustand 5.1.0 | MIT |
 | @tauri-apps/api 2.12.4, plugin-dialog 2.8.4, plugin-clipboard-manager 2.5.0 | MIT OR Apache-2.0 |
-| @fontsource/silkscreen, vt323, ibm-plex-mono 5.3.0 | OFL-1.1 (fonts) |
+| @fontsource/noto-sans, silkscreen, vt323, ibm-plex-mono | OFL-1.1 (fonts) |
 
 Development-only tools (not shipped): Vite, TypeScript, Vitest, jsdom, Testing Library, Playwright (MIT / Apache-2.0).
 
 ## Trademarks and affiliation
 
-"Lichess" and "Chess.com" are used only to name the services OUTPOST can import public games from, through their documented public APIs. OUTPOST is not affiliated with, endorsed by, or sponsored by either. No logos, artwork, or classification symbols from either service are used: OUTPOST's piece set, icons, classification glyphs and logo were drawn for this project. "Claude", "ChatGPT", "Codex", "Gemini" and "Ollama" name optional AI providers the user may connect to with their own accounts.
+"Lichess" and "Chess.com" are used only to name the services OUTPOST can import public games from, through their documented public APIs. OUTPOST is not affiliated with, endorsed by, or sponsored by either. No Lichess or Chess.com logos or classification symbols are used. The icons, classification glyphs and logo are original; the chess pieces are credited above. "Claude", "ChatGPT", "Codex", "Gemini" and "Ollama" name optional AI providers the user may connect to with their own accounts.
 
 ## Regenerating this audit
 

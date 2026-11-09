@@ -1,121 +1,165 @@
-// Self-test: drives the real interface inside the real (hidden) app window and
-// writes what it sees to the report file named by OUTPOST_SELFTEST. Inert otherwise.
-import { invoke, inTauri, errorText } from '../lib/ipc';
+// Opt-in native integration check. Run with OUTPOST_DATA_DIR set to an isolated
+// directory, OUTPOST_SELFTEST=<absolute log>, OUTPOST_SELFTEST_USER=<account>.
+import { api, invoke, inTauri, errorText } from '../lib/ipc';
 import { useStore, type View } from '../store';
-import { startScan } from '../tactics/scan';
+import { useGameChat } from '../views/gameChat';
+import { playUci } from '../chess/position';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-async function until(test: () => boolean, ms: number, step = 250) {
+async function until(test: () => boolean, ms: number) {
   const end = Date.now() + ms;
-  while (Date.now() < end) {
-    if (test()) return true;
-    await wait(step);
-  }
+  while (Date.now() < end) { if (test()) return true; await wait(200); }
   return test();
 }
-
 function setInput(el: HTMLInputElement, value: string) {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(el, value);
   el.dispatchEvent(new Event('input', { bubbles: true }));
 }
-
 function button(label: RegExp, root: ParentNode = document) {
-  return [...root.querySelectorAll('button')].find((b) => label.test(b.textContent ?? '')) as HTMLButtonElement | undefined;
+  return [...root.querySelectorAll('button')].find((b) => label.test(b.textContent ?? ''));
 }
-
 const text = (el: Element | null) => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
 
 export async function runSelftest() {
   if (!inTauri) return;
-  const cfg = await invoke<{ user: string | null } | null>('selftest_info').catch(() => null);
+  const cfg = await invoke<{ user: string | null; canClear: boolean } | null>('selftest_info').catch(() => null);
   if (!cfg) return;
-  const log = (line: string) => invoke('selftest_log', { line }).catch(() => {});
-  const failures: string[] = [];
-  const check = (ok: boolean, what: string) => {
-    log(`${ok ? 'PASS' : 'FAIL'} ${what}`);
-    if (!ok) failures.push(what);
+  const log = (line: string) => invoke('selftest_log', { line });
+  const check = async (ok: boolean, what: string) => {
+    await log(`${ok ? 'PASS' : 'FAIL'} ${what}`);
+    if (!ok) throw new Error(what);
   };
-  window.addEventListener('error', (e) => log(`JS-ERROR ${e.message} @ ${e.filename}:${e.lineno}`));
-  window.addEventListener('unhandledrejection', (e) => log(`JS-REJECT ${errorText(e.reason)}`));
-  log(`START ${navigator.userAgent} ${window.innerWidth}x${window.innerHeight}`);
+  window.addEventListener('error', (e) => void log(`JS-ERROR ${e.message}`));
+  window.addEventListener('unhandledrejection', (e) => void log(`JS-REJECT ${errorText(e.reason)}`));
+  await log(`START ${navigator.userAgent} ${window.innerWidth}x${window.innerHeight}`);
   try {
     await until(() => !!document.querySelector('.sidebar'), 10000);
-    check(!!document.querySelector('.board'), 'analyze view renders a board');
-    for (const v of ['analyze', 'games', 'tactics', 'engines', 'ai', 'settings'] as View[]) {
-      useStore.getState().setView(v);
-      await wait(700);
-      const main = document.querySelector('main');
-      log(`VIEW ${v}: ${text(main).slice(0, 300)}`);
-      check(text(main).length > 20, `view ${v} has content`);
+    for (const view of ['games', 'tactics', 'engines', 'ai', 'settings', 'analyze'] as View[]) {
+      useStore.getState().setView(view);
+      await wait(500);
+      await check(text(document.querySelector('main')).length > 20, `${view} view renders`);
     }
-    const toasts = () => text(document.querySelector('.toasts'));
+    await check(!!document.querySelector('.center-col .ai-panel'), 'conversation below the board');
+    await check(!document.querySelector('.right-col .ai-panel'), 'right column reserved for evaluation, moves and puzzles');
+    await check(!document.querySelector('.position-overview, .position-tabs, .agent-provider'), 'plain chat has no prompt tabs, provider picker or position details');
     if (cfg.user) {
-      const rowCount = () => document.querySelectorAll('main table tbody tr').length;
-      let before = 0;
-      for (const platform of ['lichess', 'chesscom'] as const) {
-        // Start from the Games page, the way a person would, so a list that fails to refresh is caught.
-        useStore.getState().setView('games');
-        await wait(800);
-        before = rowCount();
-        useStore.getState().openImport(platform);
-        await until(() => !!document.querySelector('.modal input[type=text]'), 3000);
-        const input = document.querySelector('.modal input[type=text]') as HTMLInputElement | null;
-        check(!!input, `${platform}: username field present`);
-        if (!input) continue;
-        setInput(input, cfg.user);
-        const count = document.querySelector('.modal input[type=number]') as HTMLInputElement | null;
-        if (count) setInput(count, '10');
-        await wait(200);
-        const go = button(/Import games/, document.querySelector('.modal')!);
-        check(!!go && !go.disabled, `${platform}: import button enabled`);
-        go?.click();
-        const finished = await until(() => /Imported \d+|Stopped|error|no player/i.test(text(document.querySelector('.modal .notice')) + toasts()), 90000, 500);
-        log(`${platform} notice: ${text(document.querySelector('.modal .notice'))} | toasts: ${toasts()}`);
-        check(finished && /Imported \d+/.test(text(document.querySelector('.modal .notice'))), `${platform}: import reports completion`);
-        await wait(800);
-        log(`${platform}: list behind the dialog went ${before} -> ${rowCount()} rows`);
-        check(rowCount() > before, `${platform}: open games list refreshes during import`);
-        const open = button(/Open library/, document.querySelector('.modal')!);
-        check(!!open, `${platform}: "Open library" offered`);
-        open?.click();
-        await wait(1200);
-        const rows = document.querySelectorAll('main table tbody tr');
-        log(`${platform} games view: ${rows.length} rows; first: ${text(rows[0] ?? null).slice(0, 160)}`);
-        check(rows.length > before, `${platform}: new games listed after import`);
+      const before = (await api.games({})).total;
+      useStore.getState().openImport('lichess');
+      await until(() => !!document.querySelector('.modal input[placeholder="Any player’s username"]'), 5000);
+      const input = document.querySelector('.modal input[placeholder="Any player’s username"]') as HTMLInputElement;
+      setInput(input, cfg.user);
+      await wait(250);
+      button(/^Browse games$/, document.querySelector('.modal')!)?.click();
+      await check(await until(() => !!document.querySelector('[aria-label="Game history"] .box'), 60000), 'remote history appears');
+      await check((await api.games({})).total === before, 'browsing imports nothing');
+      const rows = [...document.querySelectorAll('[aria-label="Game history"] .box')];
+      const selected = rows.find((r) => r.querySelectorAll('b')[1]?.textContent?.toLowerCase() === cfg.user!.toLowerCase());
+      await check(!!selected, 'history includes a game played as Black');
+      await log(`SELECT ${text(selected!)}`);
+      (selected!.querySelector('button') as HTMLButtonElement).click();
+      await check(await until(() => useStore.getState().gameId !== null && !document.querySelector('.modal'), 15000), 'selected game imports and opens');
+      const s = useStore.getState();
+      await check((await api.games({})).total === before + 1, 'exactly one game imported');
+      await check(s.orientation === 'black' && s.playerColor === 'black', 'Black account faces the player');
+      await check(text(document.querySelector('.move-players')).includes('(you)'), 'move list identifies your side');
+      await log(`GAME id=${s.gameId} white=${s.game?.white} black=${s.game?.black}`);
+      button(/^Generate puzzles/)?.click();
+      await check(await until(() => useStore.getState().scan !== null, 5000), 'Generate puzzles starts current-game scan');
+      let previous = '';
+      const end = Date.now() + 600000;
+      while (useStore.getState().scan && Date.now() < end) {
+        const progress = JSON.stringify(useStore.getState().scan?.progress);
+        if (progress !== previous) { await log(`SCAN ${progress}`); previous = progress; }
+        await wait(1500);
       }
-      const accounts = text(document.querySelector('main')).toLowerCase().includes(cfg.user.toLowerCase());
-      log(`accounts section: ${accounts ? 'present' : 'absent'}`);
-      const first = document.querySelector('main table tbody tr') as HTMLElement | null;
-      first?.click();
-      await wait(1500);
-      const st = useStore.getState();
-      const moves = st.tree.nodes[st.tree.root].children.length > 0;
-      log(`after opening a game: view=${st.view} hasMoves=${moves} gameId=${st.gameId}`);
-      check(st.view === 'analyze' && moves, 'opening an imported game loads it on the board');
-    }
-    // Engine and tactics: the built-in engine must be registered; scan two games end to end.
-    const engines = await invoke<{ name: string; builtin: boolean; default: boolean }[]>('engines_list');
-    log(`engines: ${engines.map((e) => `${e.name}${e.builtin ? ' [built in]' : ''}${e.default ? ' [default]' : ''}`).join(', ') || 'none'}`);
-    check(engines.some((e) => e.builtin && e.default), 'built-in engine registered as default');
-    if (cfg.user && engines.length) {
+      await check(useStore.getState().scan === null, 'scan completes');
+      const tactics = await api.tacticsForGame(s.gameId!);
+      await check(tactics.length > 0, 'current game produces tactics');
+      await check(tactics.every((t) => t.gameId === s.gameId), 'all generated tactics belong to selected game');
+      await log(`TACTICS ${tactics.length}`);
+      for (const tactic of tactics) {
+        let fen = tactic.fen;
+        for (let i = 0; i < tactic.moves.length; i++) {
+          const next = playUci(fen, tactic.moves[i]);
+          await check(!!next, `tactic ${tactic.id} move ${i} legal`);
+          fen = next!.fen;
+          if (i % 2 === 1) {
+            const verdict = await api.tacticCheck(tactic.id, i, tactic.moves[i]);
+            await check(verdict.result === 'correct', `tactic ${tactic.id} solution move ${i} accepted`);
+          }
+        }
+      }
+      await check(await until(() => !!document.querySelector('.puzzle-status'), 5000), 'generated puzzle opens in trainer');
+      await check(useStore.getState().view === 'analyze' && !!document.querySelector('.inline-trainer'), 'current-game puzzle stays in the analysis window');
+      await check(!document.querySelector('.engine-panel'), 'engine answers hidden while solving');
+      await until(() => /to play/.test(text(document.querySelector('.puzzle-status'))), 3000);
+      await log(`TRAINER ${text(document.querySelector('.puzzle-status'))}`);
+      const board = document.querySelector('.board')!.getBoundingClientRect();
+      const square = document.querySelector('.board [data-square="a1"]')!.getBoundingClientRect();
+      await check(Math.abs(board.width - board.height) < 1 && Math.abs(square.height * 8 - board.height) < 2 && Math.abs(square.width * 8 - board.width) < 2, 'native puzzle board and squares have matching geometry');
+
+      button(/^Solution$/)?.click();
+      await wait(1000);
+      await check(text(document.querySelector('.puzzle-status')) === 'Solution shown', 'solution is accessible in trainer');
+      button(/^Back to game$/)?.click();
+      await check(await until(() => !!document.querySelector('.engine-panel'), 3000), 'Back to game restores analysis');
+      await check(useStore.getState().tree.nodes[useStore.getState().current].fen === s.tree.nodes[s.current].fen, 'puzzle practice preserves the analyzed position');
+      await api.importPgn('[White "Basic fixture"]\n[Black "Practice"]\n\n1. e4 e5 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7# 1-0');
+      await api.importPgn('[White "Quiet fixture"]\n[Black "Practice"]\n\n1. d4 d5 *');
       useStore.getState().setView('tactics');
-      await wait(800);
-      const t0 = Date.now();
-      await startScan({ strictness: 'personal', onlyMine: true, rescan: false, maxGames: 2 });
-      const st = await invoke<{ scanned: number; tactics: number }>('tactics_stats');
-      log(`tactic scan: ${st.scanned} game(s) scanned, ${st.tactics} tactic(s), ${((Date.now() - t0) / 1000).toFixed(1)}s | toasts: ${toasts()}`);
-      check(st.scanned === 2, 'tactic scan completes two games');
-      await wait(1500);
-      log(`tactics view: ${text(document.querySelector('main')).slice(0, 240)}`);
-      if (st.tactics > 0) check(!!document.querySelector('.puzzle-status'), 'a tactic is shown for training');
+      await check(await until(() => /White to play and mate/.test(text(document.querySelector('.puzzle-status'))), 5000), 'Puzzles opens with built-in basic practice');
+      const batch = () => button(/^Generate puzzles from my games$/, document.querySelector('.batch-puzzles')!);
+      await until(() => !!batch() && !batch()!.disabled, 3000);
+      batch()?.click();
+      await check(await until(() => useStore.getState().scan !== null, 3000), 'batch generation starts');
+      await check(await until(() => useStore.getState().scan === null, 120000), 'batch generation finishes');
+      const stats = await api.tacticsStats();
+      await check(stats.scanned === 3, 'batch processes only the two remaining games, including a zero-puzzle game');
+      const beforePuzzles = await api.tacticsForGame(s.gameId!);
+      await until(() => !!batch() && !batch()!.disabled, 3000);
+      batch()?.click();
+      await until(() => useStore.getState().scan === null, 5000);
+      await check((await api.tacticsStats()).scanned === stats.scanned && JSON.stringify(await api.tacticsForGame(s.gameId!)) === JSON.stringify(beforePuzzles), 'repeat batch skips all previously processed games');
+
     }
-    log(`TOASTS ${toasts()}`);
-  } catch (e) {
-    log(`CRASH ${errorText(e)}`);
-    failures.push('crash');
-  }
-  log(failures.length ? `RESULT FAIL (${failures.length}): ${failures.join('; ')}` : 'RESULT PASS');
-  await wait(300);
-  await invoke('selftest_done').catch(() => {});
+    const agent = await api.aiProviders();
+    if (cfg.user && agent.settings.active) {
+      useStore.getState().setView('analyze');
+      await until(() => !!document.querySelector('.ai-input textarea:not(:disabled)'), 5000);
+      const ask = async (question: string) => {
+        const input = document.querySelector('.ai-input textarea') as HTMLTextAreaElement;
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, question);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        await wait(200);
+        (document.querySelector('.ai-input button[type="submit"]') as HTMLButtonElement).click();
+        await check(await until(() => useGameChat.getState().pending !== null, 5000), 'agent request starts');
+        await check(await until(() => useGameChat.getState().pending === null, 120000), 'agent request finishes');
+        const messages = useGameChat.getState().conversations[useStore.getState().analysisSession].messages;
+        const answer = messages[messages.length - 1];
+        await log(`AGENT ${answer.content}`);
+        await check(answer.role === 'assistant' && !answer.error, 'live agent answers');
+        return answer.content;
+      };
+      await ask('Remember the word bishop for my next question. Which color am I playing in this imported game? Reply in one sentence.');
+      useStore.getState().next();
+      await wait(300);
+      const reply = await ask('Which color am I playing, and what word did I ask you to remember? Reply in one sentence.');
+      await check(/black/i.test(reply) && /bishop/i.test(reply), 'agent retains conversation and player identity after moving');
+    }
+    if (cfg.canClear) {
+      const settings = (await api.aiProviders()).settings;
+      useStore.getState().setView('games'); await wait(600);
+      button(/^Clear history$/)?.click();
+      await check(await until(() => !!document.querySelector('.modal'), 2000), 'history clearing offers an explicit confirmation');
+      button(/^Cancel$/, document.querySelector('.modal')!)?.click();
+      await check((await api.games({})).total > 0, 'cancelling history clearing preserves games');
+      button(/^Clear history$/)?.click(); await wait(200);
+      button(/^Clear game history$/, document.querySelector('.modal')!)?.click();
+      await check(await until(() => !document.querySelector('.modal'), 5000), 'history clear completes');
+      await check((await api.games({})).total === 0 && (await api.tacticsStats()).tactics === 0, 'history clear removes games and generated puzzles');
+      await check(JSON.stringify((await api.aiProviders()).settings) === JSON.stringify(settings), 'history clear preserves agent settings');
+    }
+    await log('RESULT PASS');
+  } catch (e) { await log(`RESULT FAIL ${errorText(e)}`); }
+  await invoke('selftest_done');
 }

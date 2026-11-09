@@ -3,10 +3,16 @@ import { useStore } from '../store';
 import { CLASS_LABEL, ClassIcon, Icon, Panel, Toggle, formatScore } from '../components/ui';
 import { EvalGraph } from './EvalGraph';
 import { evalSeries, reviewByNode } from './analysis';
-import { mainline, type GameTree } from '../chess/tree';
+import { header, mainline, type GameTree } from '../chess/tree';
 import { positionFromFen } from '../chess/position';
 import type { Classification, EngineRecord, MoveReview, PvLine, Snapshot } from '../lib/types';
 import { api } from '../lib/ipc';
+
+function playerLabel(color: 'white' | 'black') {
+  const s = useStore.getState();
+  const side = color === 'white' ? 'White' : 'Black';
+  return `${header(s.tree, side) ?? side}${s.playerColor === color ? ' (you)' : ''}`;
+}
 
 function numberedLine(fen: string, san: string[], max = 99): { num?: string; san: string; index: number }[] {
   const pos = positionFromFen(fen);
@@ -69,6 +75,7 @@ function Lines({ snap, fen, onHover }: { snap: Snapshot; fen: string; onHover: (
 
 export function EnginePanel({ engines, onHover }: { engines: EngineRecord[]; onHover: (uci: string | null) => void }) {
   const s = useStore();
+  const [expanded, setExpanded] = useState(false);
   const node = s.tree.nodes[s.current];
   const live = s.live && s.live.fen === node.fen ? s.live : null;
   const compare = s.compare && s.compare.fen === node.fen ? s.compare : null;
@@ -94,16 +101,13 @@ export function EnginePanel({ engines, onHover }: { engines: EngineRecord[]; onH
             ) : (
               <span>{engine?.name ?? 'No engine'}</span>
             )}
-            {live && <span className="dim">(depth {live.depth})</span>}
+
           </span>
         </div>
       }
       right={
         <>
-          <button className={`btn small icon-only ${s.engineOn ? 'on' : ''}`} onClick={() => s.setEngineOn(!s.engineOn)} title="Toggle engine (Space)" aria-pressed={s.engineOn} disabled={!engine}>
-            <Icon name="power" />
-          </button>
-          <span className={`eval-badge ${!live ? 'off' : top && top.score.value < 0 ? 'black' : ''}`} title={blackToMove ? 'Black to move · scores from White’s view' : 'White to move · scores from White’s view'}>{badge}</span>
+          <button className={`engine-toggle ${s.engineOn ? 'on' : ''}`} onClick={() => s.setEngineOn(!s.engineOn)} title="Toggle engine (Space)" aria-pressed={s.engineOn} disabled={!engine}><span className="lamp" />{s.engineOn ? 'On' : 'Off'}</button>
         </>
       }
     >
@@ -115,7 +119,12 @@ export function EnginePanel({ engines, onHover }: { engines: EngineRecord[]; onH
       {engine && s.engineError && <div className="notice error">{s.engineError}</div>}
       {engine && !s.engineOn && !s.engineError && <p className="dim small">Engine paused. Press <kbd>Space</kbd> or the power button to analyse.</p>}
       {engine && s.engineOn && !live && !s.engineError && <p className="dim small">Starting {engine.name}<span className="blink">_</span></p>}
-      {live && <Lines snap={live} fen={node.fen} onHover={onHover} />}
+      {live?.terminal ? <Lines snap={live} fen={node.fen} onHover={onHover} /> : top && <button className="best-move" onClick={() => s.playLine(top.uci.slice(0, 1))} onMouseEnter={() => onHover(top.uci[0])} onMouseLeave={() => onHover(null)}><span>Best for {playerLabel(blackToMove ? 'black' : 'white')}:</span> <strong>{top.san[0]}</strong><span className="eval-badge" title={`${blackToMove ? 'Black' : 'White'} to move · White’s perspective · depth ${live?.depth}`}>{badge}</span></button>}
+      <p className="eval-perspective small dim">{blackToMove ? 'Black' : 'White'} to move · scores from White’s perspective</p>
+      <EvalGraph points={series} current={s.current} onSelect={s.goto} />
+      <button className="analysis-details" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? 'Hide analysis details' : 'Show more lines'}<Icon name="chevron" /></button>
+      <div hidden={!expanded}>
+      {live && !live.terminal && <Lines snap={live} fen={node.fen} onHover={onHover} />}
       <div className="row" style={{ marginTop: 6 }}>
         <span className="small dim">Lines</span>
         <button className="btn small icon-only" onClick={() => s.setPrefs({ multipv: Math.max(1, s.prefs.multipv - 1) })} aria-label="Fewer lines"><Icon name="minus" /></button>
@@ -144,7 +153,7 @@ export function EnginePanel({ engines, onHover }: { engines: EngineRecord[]; onH
           <p className="heuristic-note">Separate engines, separate searches: scores use each engine's own scale, and depth means different amounts of work for different engines.</p>
         </div>
       )}
-      <EvalGraph points={series} current={s.current} onSelect={s.goto} />
+      </div>
     </Panel>
   );
 }
@@ -201,9 +210,9 @@ function MoveCell({ id, review, showEval, evalText }: { id?: string; review?: Mo
   if (!id) return <span />;
   const n = s.tree.nodes[id];
   return (
-    <button className={`mv ${id === s.current ? 'current' : ''}`} onClick={() => s.goto(id)} title={review ? `${CLASS_LABEL[review.classification]}${review.bestSan && review.bestSan !== review.san ? ` — best was ${review.bestSan}` : ''}` : undefined}>
+    <button className={`mv ${id === s.current ? 'current' : ''}`} onClick={() => s.goto(id)} title={review ? `${playerLabel(review.color)}: ${review.san} — ${CLASS_LABEL[review.classification]}${review.bestSan && review.bestSan !== review.san ? ` — best was ${review.bestSan}` : ''}` : undefined}>
       <span>{n.san}</span>
-      {review && review.classification !== 'good' && <ClassIcon c={review.classification} />}
+      {review && <span className={`row-rating cls-${review.classification}`}>{CLASS_LABEL[review.classification]}</span>}
       {showEval && evalText && <span className="faint small">{evalText}</span>}
     </button>
   );
@@ -234,12 +243,17 @@ export function MoveList({ reviewing, onReview }: { reviewing: { done: number; t
     const e = s.nodeEvals[id];
     return e ? formatScore(e.score) : undefined;
   };
-  const rowEval = (r: { white?: string; black?: string }) => evalAfter(r.black) ?? evalAfter(r.white);
   const selected = reviews.get(s.current);
 
   useEffect(() => {
     const el = document.querySelector('.movelist .mv.current');
-    el?.scrollIntoView({ block: 'nearest' });
+    const scroller = el?.closest('.panel-body');
+    if (!el || !scroller) return;
+    const item = el.getBoundingClientRect(), bounds = scroller.getBoundingClientRect();
+    // Scroll the move list only; navigating must not drag the board/chat off screen.
+    const scale = bounds.height / (scroller as HTMLElement).offsetHeight || 1;
+    if (item.top < bounds.top + 32) scroller.scrollTop += (item.top - bounds.top - 32) / scale;
+    else if (item.bottom > bounds.bottom) scroller.scrollTop += (item.bottom - bounds.bottom) / scale;
   }, [s.current]);
 
   const jumpToNext = (filter: (c: Classification) => boolean) => {
@@ -255,24 +269,25 @@ export function MoveList({ reviewing, onReview }: { reviewing: { done: number; t
     <Panel
       id="moves"
       className="moves-panel"
-      title={
+      title={<h2><button className="move-heading" onClick={() => setTab('moves')}><Icon name="list" />{tab === 'moves' ? 'Move list' : 'Game review'}</button></h2>}
+      right={<details className="move-options"><summary aria-label="Move list options"><Icon name="settings" /></summary><div className="agent-menu">
         <div className="tabs" role="tablist">
           <button role="tab" className={tab === 'moves' ? 'active' : ''} aria-selected={tab === 'moves'} onClick={() => setTab('moves')}>Move list</button>
-          <button role="tab" className={tab === 'review' ? 'active' : ''} aria-selected={tab === 'review'} onClick={() => setTab('review')}>Review{s.report ? '' : ''}</button>
+          <button role="tab" className={tab === 'review' ? 'active' : ''} aria-selected={tab === 'review'} onClick={() => setTab('review')}>Review</button>
         </div>
-      }
-      right={tab === 'moves' ? <Toggle on={s.prefs.showEval} onChange={(v) => s.setPrefs({ showEval: v })} label="Eval" /> : undefined}
+        <Toggle on={s.prefs.showEval} onChange={(v) => s.setPrefs({ showEval: v })} label="Evaluation details" />
+      </div></details>}
     >
       {tab === 'moves' && (
         <div className="movelist">
-          {rows.length === 0 && <p className="dim small">No moves yet. Drag a piece, click a piece then a square, or type a move below the board.</p>}
+          {rows.length > 0 && <div className="move-players"><span /><span title={playerLabel('white')}>White · {playerLabel('white')}</span><span title={playerLabel('black')}>Black · {playerLabel('black')}</span></div>}
+          {rows.length === 0 && <p className="dim small">No moves yet. Drag a piece, click a piece then a square, or type a move in Board tools.</p>}
           {rows.map((r, i) => (
             <Fragment key={i}>
               <div className="mrow">
                 <span className="num">{r.num}.</span>
-                {r.white ? <MoveCell id={r.white} review={reviews.get(r.white)} showEval={false} /> : <span className="dim">…</span>}
-                <MoveCell id={r.black} review={reviews.get(r.black ?? '')} showEval={false} />
-                <span className="ev">{s.prefs.showEval ? rowEval(r) ?? '' : ''}</span>
+                {r.white ? <MoveCell id={r.white} review={reviews.get(r.white)} showEval={s.prefs.showEval} evalText={evalAfter(r.white)} /> : <span className="dim">…</span>}
+                <MoveCell id={r.black} review={reviews.get(r.black ?? '')} showEval={s.prefs.showEval} evalText={evalAfter(r.black)} />
               </div>
               {[r.white, r.black].map((id) => id && s.tree.nodes[id].comment ? <div key={`c${id}`} className="comment">{s.tree.nodes[id].comment}</div> : null)}
               {r.vars.map((v) => (
@@ -304,7 +319,7 @@ export function MoveList({ reviewing, onReview }: { reviewing: { done: number; t
           {s.report && !reviewing && (
             <>
               <div className="review-table">
-                <span className="head">{s.report.engine}</span><span className="head">White</span><span className="head">Black</span>
+                <span className="head">{s.report.engine}</span><span className="head">White · {playerLabel('white')}</span><span className="head">Black · {playerLabel('black')}</span>
                 <span className="k">Mean move accuracy</span><span className="v">{s.report.white.accuracy.toFixed(1)}%</span><span className="v">{s.report.black.accuracy.toFixed(1)}%</span>
                 <span className="k">Avg. centipawn loss</span><span className="v">{s.report.white.acpl.toFixed(0)}</span><span className="v">{s.report.black.acpl.toFixed(0)}</span>
                 {ORDER.map((c) => (
@@ -341,7 +356,7 @@ export function MoveList({ reviewing, onReview }: { reviewing: { done: number; t
               )}
               {selected && (
                 <div className="move-detail">
-                  <div className="row"><ClassIcon c={selected.classification} /><b>{selected.san}</b><span className="dim">{CLASS_LABEL[selected.classification]}</span></div>
+                  <div className="row"><ClassIcon c={selected.classification} /><b>{playerLabel(selected.color)}: {selected.san}</b><span className="dim">{CLASS_LABEL[selected.classification]}</span></div>
                   <dl className="facts">
                     <dt>Engine best</dt><dd>{selected.bestSan ?? '—'} {selected.bestLine.length > 1 && <span className="faint">({selected.bestLine.slice(0, 6).join(' ')})</span>}</dd>
                     <dt>Eval before → after</dt><dd>{formatScore(selected.evalBefore)} → {formatScore(selected.evalAfter)}</dd>

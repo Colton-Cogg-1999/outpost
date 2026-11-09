@@ -41,13 +41,8 @@ export async function loadDroppedPaths(paths: string[]): Promise<void> {
   const s = useStore.getState();
   for (const path of paths) {
     const ext = path.split('.').pop()?.toLowerCase() ?? '';
-    if (['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'].includes(ext)) {
-      (window as unknown as { __outpostImage?: string }).__outpostImage = path;
-      s.openImport('image');
-      return;
-    }
     if (!['pgn', 'fen', 'epd', 'txt'].includes(ext)) {
-      s.toast(`Can't open .${ext} files. Drop a PGN, FEN or image.`, 'error');
+      s.toast(`Can't open .${ext} files. Drop a PGN or FEN file.`, 'error');
       continue;
     }
     const text = await api.readText(path);

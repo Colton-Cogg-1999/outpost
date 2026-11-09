@@ -1,126 +1,101 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore, type ImportTab } from '../store';
 import { Icon, Modal } from '../components/ui';
 import { api, errorText, nextJobId } from '../lib/ipc';
 import { openPgnFile, openPgnText, readClipboard } from '../lib/files';
 import { openGame } from './Games';
 import { fenError } from '../chess/position';
-import { PieceSprite } from '../board/pieces';
-import { analyseCells, findBoard, guessWhiteAtBottom, placement, plausibleCastling, propagate, startingPositionLabels, type Bounds, type Cell, type Img, type PieceCode } from '../vision/detect';
-import type { ImportProgress } from '../lib/types';
-import type { Role } from 'chessops/types';
+import type { HistoryGame, HistoryPage } from '../lib/types';
 
 const TABS: { id: ImportTab; label: string }[] = [
   { id: 'lichess', label: 'Lichess' },
   { id: 'chesscom', label: 'Chess.com' },
   { id: 'pgn', label: 'PGN / FEN' },
-  { id: 'image', label: 'Screenshot (experimental)' },
 ];
 
-function AccountImport({ platform }: { platform: 'lichess' | 'chesscom' }) {
+export function AccountImport({ platform }: { platform: 'lichess' | 'chesscom' }) {
   const toast = useStore((s) => s.toast);
-  const close = () => useStore.getState().openImport(null);
   const [username, setUsername] = useState('');
-  const [max, setMax] = useState(50);
-  const [speeds, setSpeeds] = useState<string[]>([]);
-  const [since, setSince] = useState('');
-  const [rated, setRated] = useState(false);
-  const [job, setJob] = useState<number | null>(null);
-  const [progress, setProgress] = useState<ImportProgress | null>(null);
+  const [ownAccount, setOwnAccount] = useState(true);
+  const [month, setMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [page, setPage] = useState<HistoryPage | null>(null);
+  const [cursors, setCursors] = useState<(number | null)[]>([null]);
+  const [busy, setBusy] = useState(false);
   const [gameRef, setGameRef] = useState('');
-  const speedOptions = platform === 'lichess' ? ['bullet', 'blitz', 'rapid', 'classical', 'correspondence'] : ['bullet', 'blitz', 'rapid', 'daily'];
+  const job = useRef<number | null>(null);
+  const generation = useRef(0);
+  useEffect(() => () => {
+    generation.current++;
+    if (job.current !== null) void api.cancel(job.current).catch(() => {});
+  }, []);
 
-  const run = async () => {
+  const reset = () => { setPage(null); setCursors([null]); };
+  const browse = async (trail: (number | null)[] = [null]) => {
+    const token = ++generation.current;
     const id = nextJobId();
-    setJob(id);
-    setProgress(null);
-    const options = {
-      username: username.trim(),
-      maxGames: max || null,
-      since: since ? Math.floor(new Date(since).getTime() / 1000) : null,
-      ratedOnly: rated,
-      ...(platform === 'lichess' ? { perfTypes: speeds } : { timeClasses: speeds }),
-    };
+    job.current = id;
+    setBusy(true);
     try {
-      const result = platform === 'lichess' ? await api.lichessImport(id, options, setProgress) : await api.chesscomImport(id, options, setProgress);
-      setProgress(result);
-      toast(result.message);
+      const [year, m] = month.split('-').map(Number);
+      const result = await api.history(id, { platform, username: username.trim(), year, month: m, cursor: trail[trail.length - 1] });
+      if (generation.current !== token) return;
+      setPage(result);
+      setCursors(trail);
     } catch (e) {
-      toast(errorText(e), 'error');
+      if (generation.current === token) toast(errorText(e), 'error');
     } finally {
-      setJob(null);
+      if (generation.current === token) { setBusy(false); job.current = null; }
     }
   };
-
-  const importOne = async () => {
+  const importOne = async (game?: HistoryGame) => {
+    setBusy(true);
     try {
-      const r = await api.lichessImportGame(gameRef);
+      const r = game ? await api.importSelected({ ...game, account: ownAccount ? username.trim() : null }) : await api.lichessImportGame(gameRef);
       await openGame(r.id);
       toast(r.duplicate ? 'Already in your library — opened it.' : 'Game imported.');
-      close();
-    } catch (e) {
-      toast(errorText(e), 'error');
-    }
+      useStore.getState().openImport(null);
+    } catch (e) { toast(errorText(e), 'error'); }
+    finally { setBusy(false); }
   };
-
   return (
     <div style={{ display: 'grid', gap: 12 }}>
-      <p className="dim small">
-        {platform === 'lichess'
-          ? 'Uses the public Lichess API. No login needed for public games; only finished games are imported.'
-          : 'Uses Chess.com’s public Published-Data API: monthly archives of completed games. Never asks for your password.'}{' '}
-        Requests are made one at a time. OUTPOST is not affiliated with {platform === 'lichess' ? 'Lichess' : 'Chess.com'}.
-      </p>
-      <div className="grid2">
-        <label className="field">
-          <span>Username</span>
-          <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="e.g. your_handle" autoFocus />
+      <p className="dim small">Browse any player’s public games by username, then select a game to import. Browsing adds nothing to your library.</p>
+      <form className="row" onSubmit={(e) => { e.preventDefault(); void browse(); }}>
+        <label className="field" style={{ flex: 1 }}><span>Player username</span>
+          <input value={username} disabled={busy} onChange={(e) => { setUsername(e.target.value); reset(); }} placeholder="Any player’s username" autoFocus />
         </label>
-        <label className="field">
-          <span>Latest games to import</span>
-          <input type="number" min={1} max={10000} value={max} onChange={(e) => setMax(Number(e.target.value))} />
+        <label className="field"><span>Month</span>
+          <input type="month" value={month} disabled={busy} onChange={(e) => { setMonth(e.target.value); reset(); }} />
         </label>
-        <label className="field">
-          <span>Only games since (optional)</span>
-          <input type="text" placeholder="YYYY-MM-DD" value={since} onChange={(e) => setSince(e.target.value)} />
-        </label>
-        <label className="field">
-          <span>Rated only</span>
-          <select value={rated ? 'y' : 'n'} onChange={(e) => setRated(e.target.value === 'y')}>
-            <option value="n">Rated and casual</option>
-            <option value="y">Rated only</option>
-          </select>
-        </label>
-      </div>
-      <div className="row">
-        <span className="small dim">Time controls:</span>
-        {speedOptions.map((sp) => (
-          <button key={sp} className={`btn small ${speeds.includes(sp) ? 'on' : ''}`} onClick={() => setSpeeds(speeds.includes(sp) ? speeds.filter((x) => x !== sp) : [...speeds, sp])} aria-pressed={speeds.includes(sp)}>
-            {sp}
-          </button>
-        ))}
-        {speeds.length === 0 && <span className="faint small">all</span>}
-      </div>
-      {progress && (
-        <div className="notice">
-          {progress.message}
-          <br />
-          <span className="small">{progress.imported} imported · {progress.duplicates} already in library · {progress.skipped} skipped (variants, unfinished or filtered) · {progress.scanned} scanned</span>
+        <button className="btn primary" disabled={busy || !username.trim() || !/^\d{4}-\d{2}$/.test(month)}>{busy ? 'Loading…' : 'Browse games'}</button>
+      </form>
+      <label className="row small"><input type="checkbox" checked={ownAccount} onChange={(e) => setOwnAccount(e.target.checked)} disabled={busy} />This is my account</label>
+      {job.current !== null && <button className="btn" onClick={() => { if (job.current !== null) void api.cancel(job.current); }}>Cancel</button>}
+      {page && <>
+        <div style={{ maxHeight: 360, overflowY: 'auto', display: 'grid', gap: 8 }} aria-label="Game history">
+          {page.games.length === 0 && <p className="dim">No supported games on this page. Try an older page or another month.</p>}
+          {page.games.map((game, i) => <div className="box row" key={game.sourceId ?? i}>
+            <div style={{ flex: 1 }}><b>{game.white}</b> vs <b>{game.black}</b>
+              <div className="small dim">{game.date} · {game.speed ?? game.timeControl ?? 'Chess'} · {game.result}</div>
+            </div>
+            <button className="btn" disabled={busy} onClick={() => importOne(game)} aria-label={`Import ${game.white} vs ${game.black}`}>Import & open</button>
+          </div>)}
         </div>
-      )}
-      <div className="row end">
-        {job ? <button className="btn" onClick={() => api.cancel(job)}>Stop</button> : progress?.done ? <button className="btn" onClick={() => { close(); useStore.getState().setView('games'); }}>Open library</button> : null}
-        <button className="btn primary" onClick={run} disabled={!!job || !username.trim()}><Icon name="antenna" />{job ? 'Importing…' : 'Import games'}</button>
-      </div>
-      {platform === 'lichess' && (
-        <div className="box">
-          <h3>Single game</h3>
-          <div className="row" style={{ flexWrap: 'nowrap' }}>
-            <input type="text" value={gameRef} onChange={(e) => setGameRef(e.target.value)} placeholder="https://lichess.org/AbCdEfGh or game id" style={{ flex: 1 }} />
-            <button className="btn" onClick={importOne} disabled={!gameRef.trim()}><Icon name="link" />Import & open</button>
-          </div>
+        <div className="row end">
+          <button className="btn" disabled={busy || cursors.length === 1} onClick={() => browse(cursors.slice(0, -1))}>Newer</button>
+          <span className="small dim">Page {cursors.length}</span>
+          <button className="btn" disabled={busy || page.nextCursor === null} onClick={() => browse([...cursors, page.nextCursor])}>Older</button>
         </div>
-      )}
+      </>}
+      {platform === 'lichess' && <details><summary className="small dim">Or open a game link</summary>
+        <div className="row" style={{ marginTop: 8 }}>
+          <input value={gameRef} onChange={(e) => setGameRef(e.target.value)} placeholder="Lichess game URL or ID" style={{ flex: 1 }} />
+          <button className="btn" disabled={busy || !gameRef.trim()} onClick={() => importOne()}>Import & open</button>
+        </div>
+      </details>}
     </div>
   );
 }
@@ -170,219 +145,11 @@ function PgnImport() {
   );
 }
 
-const PALETTE: PieceCode[] = ['K', 'Q', 'R', 'B', 'N', 'P', 'k', 'q', 'r', 'b', 'n', 'p'];
-const ROLE: Record<string, Role> = { k: 'king', q: 'queen', r: 'rook', b: 'bishop', n: 'knight', p: 'pawn' };
-
-function Sprite({ code }: { code: PieceCode }) {
-  return <PieceSprite role={ROLE[code.toLowerCase()]} color={code === code.toUpperCase() ? 'white' : 'black'} />;
-}
-
-async function decode(bytes: ArrayBuffer): Promise<Img> {
-  const bitmap = await createImageBitmap(new Blob([bytes]));
-  const scale = Math.min(1, 1400 / Math.max(bitmap.width, bitmap.height));
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.round(bitmap.width * scale);
-  canvas.height = Math.round(bitmap.height * scale);
-  const ctx = canvas.getContext('2d')!;
-  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  return { data: data.data, width: data.width, height: data.height };
-}
-
-function ImageImport() {
-  const toast = useStore((s) => s.toast);
-  const [img, setImg] = useState<Img | null>(null);
-  const [bounds, setBounds] = useState<Bounds | null>(null);
-  const [cells, setCells] = useState<Cell[] | null>(null);
-  const [labels, setLabels] = useState<Record<number, PieceCode | null>>({});
-  const [brush, setBrush] = useState<PieceCode | null>('P');
-  const [whiteBottom, setWhiteBottom] = useState(true);
-  const [turn, setTurn] = useState<'w' | 'b'>('w');
-  const [castling, setCastling] = useState<string | null>(null);
-  const [drag, setDrag] = useState<{ x: number; y: number } | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  const load = async (bytes: ArrayBuffer) => {
-    try {
-      const image = await decode(bytes);
-      setImg(image);
-      const b = findBoard(image);
-      setBounds(b);
-      setLabels({});
-      setCastling(null);
-      if (!b) toast('Could not find a board automatically. Drag a square around the board on the image.', 'error');
-    } catch (e) {
-      toast(`Could not read that image: ${errorText(e)}`, 'error');
-    }
-  };
-
-  useEffect(() => {
-    const w = window as unknown as { __outpostImage?: string };
-    if (w.__outpostImage) {
-      const path = w.__outpostImage;
-      w.__outpostImage = undefined;
-      api.readImage(path).then(load).catch((e) => toast(errorText(e), 'error'));
-    }
-    const onPaste = (e: ClipboardEvent) => {
-      const file = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith('image/'));
-      if (file) file.arrayBuffer().then(load);
-    };
-    window.addEventListener('paste', onPaste);
-    return () => window.removeEventListener('paste', onPaste);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (!img || !bounds) {
-      setCells(null);
-      return;
-    }
-    const c = analyseCells(img, bounds);
-    setCells(c);
-    setWhiteBottom(guessWhiteAtBottom(c));
-    const start = startingPositionLabels(c);
-    if (start) setLabels(Object.fromEntries(start.map((p, i) => [i, p])));
-  }, [img, bounds]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !img) return;
-    canvas.width = img.width;
-    canvas.height = img.height;
-    const ctx = canvas.getContext('2d')!;
-    ctx.putImageData(new ImageData(new Uint8ClampedArray(img.data), img.width, img.height), 0, 0);
-    if (bounds) {
-      ctx.strokeStyle = '#9ad8a4';
-      ctx.lineWidth = Math.max(2, img.width / 400);
-      ctx.setLineDash([8, 6]);
-      ctx.strokeRect(bounds.x, bounds.y, bounds.size, bounds.size);
-    }
-  }, [img, bounds]);
-
-  const guesses = useMemo(() => (cells ? propagate(cells, labels) : []), [cells, labels]);
-  const pieces = guesses.map((g) => g.piece);
-  const board = cells ? placement(pieces, whiteBottom) : '';
-  const rights = castling ?? (board ? plausibleCastling(board) : '-');
-  const fen = `${board} ${turn} ${rights} - 0 1`;
-  const problem = board ? fenError(fen) : null;
-  const unresolved = guesses.filter((g) => g.uncertain).length;
-
-  const toImage = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    return { x: ((e.clientX - r.left) / r.width) * (img?.width ?? 1), y: ((e.clientY - r.top) / r.height) * (img?.height ?? 1) };
-  };
-
-  return (
-    <div style={{ display: 'grid', gap: 12 }}>
-      <p className="dim small">
-        Recognises a board from a screenshot on this computer — no online service. It works best on flat 2D boards. You confirm every square: label one piece of
-        each kind and OUTPOST matches similar-looking squares; dashed squares need a look.
-      </p>
-      <div className="row">
-        <button
-          className="btn"
-          onClick={async () => {
-            const { open } = await import('@tauri-apps/plugin-dialog');
-            const path = await open({ filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }] });
-            if (typeof path === 'string') api.readImage(path).then(load).catch((e) => toast(errorText(e), 'error'));
-          }}
-        >
-          <Icon name="image" />Open image…
-        </button>
-        <span className="faint small">or paste an image (Ctrl+V) / drop a file on the window</span>
-      </div>
-      {img && (
-        <div className="vision">
-          <div className="crop">
-            <canvas
-              ref={canvasRef}
-              onMouseDown={(e) => setDrag(toImage(e))}
-              onMouseUp={(e) => {
-                if (!drag) return;
-                const p = toImage(e);
-                const size = Math.max(Math.abs(p.x - drag.x), Math.abs(p.y - drag.y));
-                if (size > 40) setBounds({ x: Math.min(drag.x, p.x), y: Math.min(drag.y, p.y), size });
-                setDrag(null);
-              }}
-              style={{ cursor: 'crosshair' }}
-              aria-label="Screenshot. Drag to select the board."
-            />
-            <span className="faint small">Drag over the image to select the board manually.</span>
-          </div>
-          {cells && (
-            <div style={{ display: 'grid', gap: 8, alignContent: 'start' }}>
-              <div className="palette" role="toolbar" aria-label="Piece to place">
-                {PALETTE.map((p) => (
-                  <button key={p} className={brush === p ? 'active' : ''} onClick={() => setBrush(p)} aria-label={`Place ${p}`}><Sprite code={p} /></button>
-                ))}
-                <button className={`erase ${brush === null ? 'active' : ''}`} onClick={() => setBrush(null)} aria-label="Empty square">∅</button>
-              </div>
-              <div className="editor-board">
-                {guesses.map((g, i) => {
-                  const light = (Math.floor(i / 8) + (i % 8)) % 2 === 0;
-                  return (
-                    <button key={i} className={`${light ? 'light' : 'dark'} ${g.uncertain ? 'uncertain' : ''}`} onClick={() => setLabels({ ...labels, [i]: brush })} aria-label={`Square ${i}`}>
-                      {g.piece && <Sprite code={g.piece} />}
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="row small">
-                <span className={unresolved ? 'warn' : 'dim'}>{unresolved ? `${unresolved} square(s) to check` : 'All squares resolved'}</span>
-                <div className="spacer" />
-                <button className="btn small" onClick={() => setWhiteBottom(!whiteBottom)}><Icon name="flip" />{whiteBottom ? 'White at bottom' : 'Black at bottom'}</button>
-              </div>
-              <div className="row small">
-                <span className="dim">To move</span>
-                <select value={turn} onChange={(e) => setTurn(e.target.value as 'w' | 'b')}>
-                  <option value="w">White</option>
-                  <option value="b">Black</option>
-                </select>
-                <span className="dim">Castling</span>
-                {(['K', 'Q', 'k', 'q'] as const).map((c) => (
-                  <label key={c} className="row" style={{ gap: 3 }}>
-                    <input type="checkbox" checked={rights.includes(c)} onChange={(e) => {
-                      const set = new Set(rights === '-' ? [] : rights.split(''));
-                      if (e.target.checked) set.add(c); else set.delete(c);
-                      const next = ['K', 'Q', 'k', 'q'].filter((x) => set.has(x)).join('');
-                      setCastling(next || '-');
-                    }} />
-                    {c}
-                  </label>
-                ))}
-              </div>
-              <code className="small" style={{ wordBreak: 'break-all' }}>{fen}</code>
-              {problem && <span className="small err">{problem}</span>}
-              <div className="row end">
-                <button
-                  className="btn primary"
-                  disabled={!!problem}
-                  onClick={() => {
-                    const err = useStore.getState().loadFen(fen);
-                    if (err) toast(err, 'error');
-                    else {
-                      useStore.getState().openImport(null);
-                      toast('Position loaded. Check it against the screenshot before relying on it.');
-                    }
-                  }}
-                >
-                  Analyze position
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function ImportDialog() {
   const tab = useStore((s) => s.importTab)!;
   const openImport = useStore((s) => s.openImport);
   return (
     <Modal
-      wide={tab === 'image'}
       title={
         <div className="tabs" role="tablist">
           {TABS.map((t) => (
@@ -395,7 +162,6 @@ export function ImportDialog() {
       {tab === 'lichess' && <AccountImport key="li" platform="lichess" />}
       {tab === 'chesscom' && <AccountImport key="cc" platform="chesscom" />}
       {(tab === 'pgn' || tab === 'fen') && <PgnImport />}
-      {tab === 'image' && <ImageImport />}
     </Modal>
   );
 }

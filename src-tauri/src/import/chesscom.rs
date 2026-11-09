@@ -99,7 +99,7 @@ fn archive_month(url: &str) -> Option<(i32, u32)> {
     Some((year, month))
 }
 
-fn month_end_unix(year: i32, month: u32) -> i64 {
+pub(super) fn month_end_unix(year: i32, month: u32) -> i64 {
     // Days from civil (Howard Hinnant) for the first day of the following month.
     let (y, m) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
     let y = if m <= 2 { y - 1 } else { y } as i64;

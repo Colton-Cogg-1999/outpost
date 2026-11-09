@@ -16,9 +16,11 @@ import { logError } from './lib/ipc';
 import type { GameReport, GameSummary, ScanProgress, Score, Snapshot } from './lib/types';
 
 export type View = 'analyze' | 'games' | 'tactics' | 'engines' | 'ai' | 'settings';
-export type ImportTab = 'lichess' | 'chesscom' | 'pgn' | 'fen' | 'image';
+export type ImportTab = 'lichess' | 'chesscom' | 'pgn' | 'fen';
 
 export interface UiPrefs {
+  workflowVersion: number;
+  appearanceVersion: number;
   crt: number; // 0..1 intensity of scanlines/glow
   translucent: boolean;
   opacity: number; // window background opacity when translucent
@@ -33,15 +35,17 @@ export interface UiPrefs {
 }
 
 export const defaultPrefs: UiPrefs = {
-  crt: 0.35,
-  translucent: true,
+  workflowVersion: 2,
+  appearanceVersion: 1,
+  crt: 0,
+  translucent: false,
   opacity: 0.86,
   coordinates: true,
   engineArrows: true,
-  arrowCount: 3,
+  arrowCount: 1,
   showEval: true,
-  multipv: 3,
-  depthLimit: null,
+  multipv: 1,
+  depthLimit: 16,
   collapsed: {},
   aiPanel: true,
 };
@@ -59,6 +63,8 @@ interface State {
   tree: GameTree;
   current: string;
   orientation: 'white' | 'black';
+  playerColor: 'white' | 'black' | null;
+  analysisSession: number;
   gameId: number | null;
   game: GameSummary | null;
   report: GameReport | null;
@@ -121,11 +127,13 @@ export const useStore = create<State>((set, get) => ({
   tree: newTree(),
   current: 'n0',
   orientation: 'white',
+  playerColor: null,
+  analysisSession: 0,
   gameId: null,
   game: null,
   report: null,
   dirty: false,
-  engineOn: false,
+  engineOn: true,
   engineId: null,
   compareId: null,
   live: null,
@@ -206,7 +214,12 @@ export const useStore = create<State>((set, get) => ({
 
   loadTree: (tree, opts = {}) => {
     const line = lineFrom(tree, tree.root);
+    const account = opts.game?.account?.trim().toLowerCase();
+    const playerColor = account && opts.game?.black?.toLowerCase() === account ? 'black' : account && opts.game?.white?.toLowerCase() === account ? 'white' : null;
     set({
+      playerColor,
+      orientation: playerColor ?? 'white',
+      analysisSession: get().analysisSession + 1,
       tree,
       current: opts.at === 'end' ? line[line.length - 1] : tree.root,
       game: opts.game ?? null,
@@ -250,3 +263,17 @@ export const useStore = create<State>((set, get) => ({
     set({ nodeEvals: { ...get().nodeEvals, [id]: { score, depth } } });
   },
 }));
+
+/** Adopt quieter defaults once, retaining non-default custom settings. */
+export function migratePrefs(ui: Partial<UiPrefs>): UiPrefs {
+  const next = { ...defaultPrefs, ...ui, collapsed: { ...ui.collapsed } };
+  if (!ui.workflowVersion) {
+    if (ui.multipv === 3) next.multipv = 1;
+    if (ui.arrowCount === 3) next.arrowCount = 1;
+    if (ui.depthLimit === null) next.depthLimit = 16;
+    if (ui.crt === 0.35) next.crt = 0;
+    if (ui.translucent === true) next.translucent = false;
+  }
+  if (!ui.appearanceVersion) next.crt = 0;
+  return { ...next, workflowVersion: 2, appearanceVersion: 1 };
+}

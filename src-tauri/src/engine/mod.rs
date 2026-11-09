@@ -42,10 +42,9 @@ pub struct EngineDefaults {
 
 impl Default for EngineDefaults {
     fn default() -> Self {
-        let cores = std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(2);
-        // Small by default: the built-in engine needs ~10 MB plus its hash table.
-        // Leave headroom for the UI and the rest of the desktop.
-        EngineDefaults { threads: (cores / 2).clamp(1, 4), hash_mb: 16 }
+        // Each search thread has its own working memory. Keep analysis lightweight;
+        // users can opt into more parallelism in Settings.
+        EngineDefaults { threads: 1, hash_mb: 16 }
     }
 }
 
@@ -213,8 +212,9 @@ impl EngineManager {
     }
 
     pub async fn shutdown(&self, id: &str) {
-        let handle = self.running.lock().await.remove(id);
-        if let Some(handle) = handle {
+        // Serialize quit with launches so an engine cannot be duplicated during restart.
+        let mut running = self.running.lock().await;
+        if let Some(handle) = running.remove(id) {
             handle.quit().await;
         }
     }

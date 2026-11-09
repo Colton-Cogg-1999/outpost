@@ -1,24 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
-import { useStore, defaultPrefs, type View, type UiPrefs } from './store';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { useStore, migratePrefs, type View, type UiPrefs } from './store';
 import { Icon, Logo } from './components/ui';
 import { api, errorText, inTauri } from './lib/ipc';
 import type { AppInfo } from './lib/types';
 import { Analyze } from './views/Analyze';
 import { Games } from './views/Games';
-import { Tactics } from './views/Tactics';
+const Tactics = lazy(() => import('./views/Tactics').then((m) => ({ default: m.Tactics })));
 import { scanText } from './tactics/scan';
-import { Engines } from './views/Engines';
-import { AiView } from './views/AiView';
-import { Settings } from './views/Settings';
-import { ImportDialog } from './views/ImportDialog';
+const Engines = lazy(() => import('./views/Engines').then((m) => ({ default: m.Engines })));
+const Settings = lazy(() => import('./views/Settings').then((m) => ({ default: m.Settings })));
+const ImportDialog = lazy(() => import('./views/ImportDialog').then((m) => ({ default: m.ImportDialog })));
 import { openPgnFile, loadDroppedPaths } from './lib/files';
 
 const NAV: { id: View; label: string; icon: string }[] = [
   { id: 'analyze', label: 'Analyze', icon: 'analyze' },
   { id: 'games', label: 'Games', icon: 'games' },
-  { id: 'tactics', label: 'Tactics', icon: 'puzzles' },
+  { id: 'tactics', label: 'Puzzles', icon: 'puzzles' },
   { id: 'engines', label: 'Engines', icon: 'engines' },
-  { id: 'ai', label: 'AI Assistant', icon: 'ai' },
+  { id: 'ai', label: 'Agent', icon: 'ai' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
 ];
 
@@ -52,11 +51,11 @@ function Sidebar({ info, engineReady }: { info: AppInfo | null; engineReady: boo
     <aside className="sidebar">
       <Logo />
       <nav className="nav" aria-label="Sections">
-        {NAV.map((n, i) => (
+        {NAV.filter((n) => n.id !== 'engines' && n.id !== 'ai').map((n) => (
           <button key={n.id} className={view === n.id ? 'active' : ''} onClick={() => setView(n.id)} aria-current={view === n.id ? 'page' : undefined}>
             <Icon name={n.icon} />
             {n.label}
-            <kbd>{i + 1}</kbd>
+            <kbd>{NAV.findIndex((item) => item.id === n.id) + 1}</kbd>
           </button>
         ))}
       </nav>
@@ -107,7 +106,7 @@ export default function App() {
     api.settingsGet()
       .then((s) => {
         const ui = (s.ui ?? {}) as Partial<UiPrefs>;
-        useStore.getState().setPrefs({ ...defaultPrefs, ...ui, collapsed: { ...ui.collapsed } });
+        useStore.getState().setPrefs(migratePrefs(ui));
       })
       .catch(() => {})
       .finally(() => (loaded.current = true));
@@ -178,21 +177,23 @@ export default function App() {
   }, []);
 
   return (
-    <div className={`app ${prefs.crt > 0 ? 'crt' : ''}`}>
+    <div className={`app view-${view} ${prefs.crt > 0 ? 'crt' : ''}`}>
       <TitleBar />
       <div className="main">
         <Sidebar info={info} engineReady={engineReady} />
         <main style={{ minWidth: 0, minHeight: 0 }}>
+          <Suspense fallback={<p className="dim">Loading…</p>}>
           {view === 'analyze' && <Analyze />}
           {view === 'games' && <Games />}
           {view === 'tactics' && <Tactics />}
           {view === 'engines' && <Engines onChange={(n) => setEngineReady(n > 0)} />}
-          {view === 'ai' && <AiView />}
+          {view === 'ai' && <Settings info={info} />}
           {view === 'settings' && <Settings info={info} />}
+          </Suspense>
         </main>
       </div>
-      {importTab && <ImportDialog />}
-      {dropping && <div className="drop-hint">DROP PGN · FEN · IMAGE</div>}
+      {importTab && <Suspense fallback={null}><ImportDialog /></Suspense>}
+      {dropping && <div className="drop-hint">DROP PGN · FEN</div>}
       <Toasts />
     </div>
   );

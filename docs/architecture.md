@@ -72,7 +72,7 @@ Network requests happen only when the user asks, and only to:
 
 ## Built-in engine
 
-`engine/builtin.rs` looks for `outpost-stockfish` next to the OUTPOST executable. That is where Tauri bundles place sidecars, and where `scripts/build`, `scripts/install-user` and the PKGBUILD put it. In a checkout it falls back to `src-tauri/binaries/outpost-stockfish-<target>`. On startup the engine is probed with a UCI handshake and registered under a stable record (`managed = 2`). If it moved, the record follows it and keeps the user's options. It becomes the default unless the user chose another engine, and it cannot be removed from the UI. Default resources are small: a 16 MB hash and up to 4 threads.
+`engine/builtin.rs` looks for `outpost-stockfish` next to the OUTPOST executable. That is where Tauri bundles place sidecars, and where `scripts/build`, `scripts/install-user` and the PKGBUILD put it. In a checkout it falls back to `src-tauri/binaries/outpost-stockfish-<target>`. On startup the engine is probed with a UCI handshake and registered under a stable record (`managed = 2`). If it moved, the record follows it and keeps the user's options. It becomes the default unless the user chose another engine, and it cannot be removed from the UI. Default resources are small: a 16 MB hash and one thread.
 
 ## Tactics from your games
 
@@ -81,10 +81,37 @@ A scan (`tactics_scan`) launches a dedicated engine process and goes through the
 1. **Review.** The game's saved review is reused. Otherwise `analysis::review::run` evaluates every position (cached in `evals`) and saves the review.
 2. **Generate.** `tactics/generator.rs` is a port of lichess-puzzler's `generator.py`. It walks the mainline with those evaluations. Where a move swings the winning chances enough, it probes deeper with MultiPV 2. Mate lines must keep a forced mate. Advantage lines must keep at least +2. Every solver move must be clearly better than the second-best move. Two rule sets exist: `Lichess` (upstream's thresholds) and `Personal` (a 0.45 uniqueness margin and 0.5 swing, single decisive moves allowed, mates kept when already ahead). Forced moves and positions on an already-found solution are skipped, so one combination is one tactic.
 3. **Tag.** `tactics/cook.rs` ports `cook.py`: mate patterns, fork, pin, skewer, discovered attack, deflection, attraction, sacrifice, endgame types, length and more. Its test cases are ported from upstream's `test.py`.
-4. **Store.** Each tactic records the position before the mistake, the mistake plus the solution, the solver, and themes. It also records whether the library owner was the solver ("you") or made the mistake ("opponent"), using the game's account or synced account names, and what was actually played. An identical position from another game is skipped.
+4. **Store.** Each tactic records the position before the mistake, the mistake plus the solution, the solver, and themes. It also records whether the library owner was the solver ("you") or made the mistake ("opponent"), using the game's account or synced account names, and what was actually played. Repeated tactical positions remain available in each originating game.
 
 Training (`tactic_next` / `tactic_check` / `tactic_attempt`) serves due reviews first, then new tactics, with the owner's own chances first. The final move of a mate accepts any mating move. A clean solve schedules the next review in 1, 3, 7, 21, then 60 days; a miss brings it back in ten minutes.
 
 ## Diagnostics
 
 Warnings, errors and uncaught frontend errors (including error toasts) are appended to `<data>/outpost.log`, truncated past 1 MB. `OUTPOST_SELFTEST=<report>` starts the app with its window hidden and runs `src/dev/selftest.ts` inside the real webview against the real backend, then exits.
+
+
+## Streamlined game workflow and resource budget (2026-11-08)
+
+Account history is a read-only operation (`games_history`), separate from `game_import_selected`. The frontend retains one page of at most 20 games, replacing it on navigation. Lichess uses a creation-time cursor in milliseconds within the selected month. Chess.com exposes monthly archives rather than a server-paged history endpoint, so each page currently fetches that month and returns only its 20 selected rows. Responses are capped at 16 MiB before JSON decoding; malformed or oversized responses fail without adding games. This bounds retained history, but a busy Chess.com month still costs a download and temporary decoding memory. A bounded disk cache keyed by account/month and HTTP validators would be a useful next improvement. See the [Lichess API](https://lichess-org.github.io/api/) and [Chess.com Published-Data API](https://www.chess.com/news/view/published-data-api).
+
+Live analysis defaults to one PV, depth 16, one thread and a 16 MiB hash. Additional lines and infinite search remain available. Older UI defaults migrate once; existing custom engine thread/hash settings remain respected. Stale frontend callbacks are discarded on position/search changes. Pausing analysis or leaving Analyze quits the managed interactive processes, releasing their networks, hash tables and thread state. Puzzle scans stop live analysis before launching their dedicated engine, then quit that engine when finished. A completed depth-limited search keeps its process warm while Analyze remains open; it is not a zero-memory idle state.
+
+Measured on this Linux machine using the bundled native Stockfish Lite binary, starting position, a three-second search and 16 MiB hash:
+
+| Threads | Sampled peak engine RSS |
+| --- | --- |
+| 1 | 56.6 MiB |
+| 4 | 121.1 MiB |
+
+Reproduce with `python3 scripts/measure-engine-memory.py [engine-path]`. This samples `/proc/<pid>/status` every 20 ms, so it can miss brief peaks. These figures describe the engine process only, not total application memory or a guarantee for other positions. No whole-app RSS reduction is claimed from this measurement.
+
+The app also loads tactics, import/image recognition, engine management, AI settings and general settings on demand. The production entry JavaScript dropped from about 399 kB to 353 kB uncompressed in this pass; bundle size is not the same as RAM saved. Puzzle navigation retains only five recent IDs and clears expired timer references.
+
+Near-zero total resident memory is not achievable with a running WebKit interface and a searching chess engine. Browser Stockfish still needs a network, hash and search working memory; moving those allocations into a WebAssembly worker changes where they are accounted for. This app already uses the system WebKit runtime rather than shipping Chromium. The largest demonstrated saving here comes from reducing thread count. Further work should measure the complete process tree (including WebKit/GPU processes), ideally PSS as well as RSS to avoid double-counting shared pages, in idle, search, import and puzzle-generation states. Offloading search could reduce local engine RAM, but would add server dependence, latency and position disclosure. A native-widget rewrite could reduce webview overhead but would be a substantial separate project.
+
+Current-game puzzle generation saves the exact current PGN and passes a single explicit game ID. Training filters by that ID. Mainline edits invalidate stored reviews, tactics and scan markers; cached reviews are additionally checked against every replayed position. Repeated tactical positions remain associated with each originating game so scanning one game cannot silently hide its tactics because another game was scanned first.
+
+
+The Analyze page trains current-game puzzles inline, pausing live engine hints until the player returns to the game. The standalone Puzzles page opens with twelve original basic mate exercises and can generate a library collection. Batch selection skips all completed scan markers, including zero-result scans and older generator versions; interrupted games without a completed marker remain eligible. Mainline edits remove the marker so the changed game can be processed again.
+
+Agent configuration lives in Settings. The board's chat sends only typed questions and retains conversation history while navigating positions or application views. Scrollback does not follow incoming text while the reader is scrolled up. Library clearing requires confirmation, refuses to run during active jobs, and deletes game-linked reviews and puzzles while preserving settings and saved conversations.

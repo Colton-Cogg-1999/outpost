@@ -17,13 +17,14 @@ pub fn report_path() -> Option<PathBuf> {
 #[serde(rename_all = "camelCase")]
 pub struct SelftestInfo {
     user: Option<String>,
+    can_clear: bool,
 }
 
 #[tauri::command]
 pub fn selftest_info() -> Option<SelftestInfo> {
     report_path()?;
     let user = std::env::var("OUTPOST_SELFTEST_USER").ok().filter(|u| crate::import::valid_username(u).is_ok());
-    Some(SelftestInfo { user })
+    Some(SelftestInfo { user, can_clear: std::env::var("OUTPOST_SELFTEST_CLEAR").as_deref() == Ok("1") && std::env::var_os("OUTPOST_DATA_DIR").is_some() })
 }
 
 #[tauri::command]

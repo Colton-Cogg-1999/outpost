@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { ClearHistory } from './ClearHistory';
 import { useStore } from '../store';
 import { Icon } from '../components/ui';
 import { api, errorText, library, nextJobId } from '../lib/ipc';
@@ -101,6 +102,7 @@ export function Games() {
           <p className="lead">Your local library: imported, pasted and saved games. Everything stays on this computer.</p>
         </div>
         <div className="spacer" />
+        <ClearHistory disabled={!!sync} />
         <button className="btn primary" onClick={() => openImport('lichess')}><Icon name="plus" />Import games</button>
       </div>
 

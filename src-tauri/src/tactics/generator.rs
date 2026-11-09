@@ -23,7 +23,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 /// Bump when the algorithm changes, so games are rescanned.
-pub const VERSION: i64 = 1;
+pub const VERSION: i64 = 2;
 
 /// "Mate soon": anything quicker than mate in 15.
 const MATE_SOON: Score = Score::Mate(15);
@@ -91,6 +91,8 @@ pub enum Strictness {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Rules {
+    /// Preliminary winning score; the solution still needs a unique, verified line.
+    pub min_advantage_cp: i32,
     /// How much better (in winning chances, -1..1) the best move must be than the second.
     pub attack_margin: f64,
     /// How much the mistake must swing the winning chances.
@@ -104,8 +106,8 @@ pub struct Rules {
 impl Strictness {
     pub fn rules(self) -> Rules {
         match self {
-            Strictness::Lichess => Rules { attack_margin: 0.7, jump: 0.6, one_move: false, mates_when_ahead: false },
-            Strictness::Personal => Rules { attack_margin: 0.45, jump: 0.5, one_move: true, mates_when_ahead: true },
+            Strictness::Lichess => Rules { min_advantage_cp: 400, attack_margin: 0.7, jump: 0.6, one_move: false, mates_when_ahead: false },
+            Strictness::Personal => Rules { min_advantage_cp: 300, attack_margin: 0.45, jump: 0.5, one_move: true, mates_when_ahead: true },
         }
     }
 }
@@ -303,7 +305,7 @@ impl<A: Analyst> Generator<'_, A> {
             return Ok(Some((solution, "mate", 999_999_999)));
         }
         if ge(score, Score::Cp(200)) && win_chances(score) > win_chances(prev_score) + self.rules.jump {
-            if lt(score, Score::Cp(400)) && material_diff(pos.board(), winner) > -1 {
+            if lt(score, Score::Cp(self.rules.min_advantage_cp)) && material_diff(pos.board(), winner) > -1 {
                 tracing::debug!("advantage {score:?}: not clearly winning");
                 return Ok(None);
             }
@@ -449,6 +451,27 @@ mod tests {
         assert_eq!(found[0].ply, 5);
         assert_eq!(found[0].kind, "mate");
         assert_eq!(found[0].moves.iter().map(|m| chess::uci_string(*m)).collect::<Vec<_>>(), ["g8f6", "h5f7"]);
+    }
+
+    #[test]
+    fn personal_accepts_verified_piece_wins_below_the_lichess_cutoff() {
+        // A real imported game: ...Nd5 is the unique winning move after Nxe5.
+        let pos = chess::parse_fen("r2q1rk1/ppp2ppp/4pnb1/4N1N1/3nP3/3P2P1/PPP3BP/R2QK2R b KQ - 4 12").unwrap();
+        let mut reply = pos.clone();
+        reply.play_unchecked(chess::parse_uci(&pos, "f6d5").unwrap());
+        for (strictness, score, expected) in [(Strictness::Personal, 372, true), (Strictness::Lichess, 372, false), (Strictness::Personal, 250, false)] {
+            let engine = Scripted(vec![
+                (chess::position_key(&pos), vec![("f6d5", Score::Cp(372)), ("g6h5", Score::Cp(59))]),
+                (chess::position_key(&reply), vec![("g5f7", Score::Cp(-350)), ("g5h7", Score::Cp(-350))]),
+            ]);
+            let cancel = AtomicBool::new(false);
+            let mut generator = Generator { engine, limits: Limits::default(), rules: strictness.rules(), cancel: &cancel };
+            let result = futures_util::FutureExt::now_or_never(generator.analyze_position(&pos, &[], Score::Cp(37), Score::Cp(score))).unwrap().unwrap();
+            assert_eq!(result.is_some(), expected, "{strictness:?}, {score}");
+            if let Some((moves, _, _)) = result {
+                assert_eq!(moves.iter().map(|m| chess::uci_string(*m)).collect::<Vec<_>>(), ["f6d5"]);
+            }
+        }
     }
 
     #[test]

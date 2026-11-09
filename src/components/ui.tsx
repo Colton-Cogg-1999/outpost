@@ -6,12 +6,16 @@ import { useStore } from '../store';
 // ───────────── icons (original line icons, 24-unit grid) ─────────────
 
 const ICONS: Record<string, string> = {
-  analyze: 'M8 5l11 7-11 7z',
-  games: 'M4 6h2M4 12h2M4 18h2M9 6h11M9 12h11M9 18h11',
-  puzzles: 'M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM12 11v2',
+  analyze: 'M16 16l5 5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0',
+  games: 'M6 3h12a2 2 0 0 1 2 2v16H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3zM6 3v18M9 7h8M9 11h8',
+  list: 'M4 6h2M4 12h2M4 18h2M9 6h11M9 12h11M9 18h11',
+  download: 'M12 3v12M7 10l5 5 5-5M3 16v5h18v-5',
+  leaf: 'M4 20l12-12M5 15C1 4 13 3 21 3c0 10-3 17-12 15',
+  puzzles: 'M4 4h5V3a3 3 0 0 1 6 0v1h5v5h1a3 3 0 0 1 0 6h-1v5h-5v-1a3 3 0 0 0-6 0v1H4v-5h1a3 3 0 0 0 0-6H4z',
   engines: 'M7 7h10v10H7zM10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4M10 10h4v4h-4z',
-  ai: 'M12 3l2 6.5L20.5 12 14 14l-2 7-2-7-6.5-2L10 9.5z',
-  settings: 'M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M13 4v4M7 10v4M15 16v4',
+  ai: 'M5 3h14a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H9l-6 3v-5a3 3 0 0 1-1-2V6a3 3 0 0 1 3-3z',
+  settings: 'M9 3h6l.5 3 2 1 3-.5 2 5-2.5 2v2l1 2-4 4-2.5-1h-2L10 23l-5-2 .5-3-1-2-3-.5v-6l3-.5 1-2L5 4zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8',
+  knight: 'M5 21h14M6 19c0-5 5-7 6-10-3 1-5 5-8 2l4-6 2-3 3 3c7 0 8 8 6 14M11 7h.01',
   antenna: 'M12 11v10M8 21h8M6.3 6.3a8 8 0 0 1 11.4 0M8.8 8.8a4.5 4.5 0 0 1 6.4 0M12 11.2v-.4',
   pawn: 'M12 3.5a2.6 2.6 0 1 1 0 5.2 2.6 2.6 0 0 1 0-5.2zM9.5 10.5h5M10 10.5l-1 7h6l-1-7M6.5 20.5h11v-3h-11z',
   file: 'M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h6',
@@ -49,7 +53,7 @@ const ICONS: Record<string, string> = {
 
 export function Icon({ name, className }: { name: keyof typeof ICONS | string; className?: string }) {
   return (
-    <svg className={`icon ${className ?? ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="square" strokeLinejoin="miter" aria-hidden="true">
+    <svg className={`icon ${className ?? ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d={ICONS[name] ?? ''} />
     </svg>
   );
@@ -179,41 +183,5 @@ export function Progress({ value }: { value: number }) {
 // ───────────── logo: an original pixel scene of a remote station ─────────────
 
 export function Logo() {
-  // 64×26 pixel canvas. Tower (a rook) with antenna, hall, radar dome, ridge, moon.
-  const dome = [
-    [40, 11, 5], [39, 12, 7], [38, 13, 9], [38, 14, 9], [38, 15, 9],
-  ];
-  return (
-    <div className="logo">
-      <svg viewBox="0 0 64 26" shapeRendering="crispEdges" aria-hidden="true">
-        <g fill="currentColor" opacity="0.35">
-          <path d="M0 22h5v-1h4v-1h3v-1h3v1h4v1h25v-1h4v-1h3v-1h3v1h3v1h7v4H0z" />
-        </g>
-        <g fill="currentColor">
-          {/* moon */}
-          <rect x="54" y="2" width="3" height="1" /><rect x="53" y="3" width="1" height="3" /><rect x="54" y="6" width="3" height="1" /><rect x="57" y="3" width="1" height="1" /><rect x="57" y="5" width="1" height="1" />
-          {/* antenna + beacon */}
-          <rect x="25" y="0" width="1" height="7" /><rect x="24" y="2" width="3" height="1" />
-          {/* rook tower */}
-          <rect x="21" y="7" width="2" height="2" /><rect x="24" y="7" width="3" height="2" /><rect x="28" y="7" width="2" height="2" />
-          <rect x="21" y="9" width="9" height="1" /><rect x="22" y="10" width="7" height="8" />
-          {/* hall */}
-          <rect x="11" y="15" width="28" height="6" /><rect x="7" y="17" width="4" height="4" /><rect x="6" y="16" width="6" height="1" />
-          {/* dome on pedestal */}
-          {dome.map(([x, y, w], i) => <rect key={i} x={x} y={y} width={w} height={1} />)}
-          <rect x="41" y="16" width="3" height="5" />
-          {/* ground */}
-          <rect x="4" y="21" width="44" height="1" />
-        </g>
-        <g fill="var(--on-phosphor)">
-          <rect x="24" y="12" width="1" height="2" /><rect x="26" y="12" width="1" height="2" />
-          <rect x="13" y="17" width="2" height="1" /><rect x="16" y="17" width="2" height="1" /><rect x="31" y="17" width="2" height="1" /><rect x="34" y="17" width="2" height="1" />
-          <rect x="24" y="17" width="3" height="4" />
-        </g>
-        <rect className="beacon blink" x="25" y="0" width="1" height="1" fill="var(--amber)" />
-      </svg>
-      <div className="wordmark">OUTPOST</div>
-      <div className="tagline">ANALYSIS · RESEARCH · UNDERSTANDING</div>
-    </div>
-  );
+  return <div className="logo"><img className="brand-pawn" src="/pieces/reference/wP.svg" alt="" /><span className="wordmark">OUTPOST</span></div>;
 }

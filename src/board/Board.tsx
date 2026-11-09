@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { createPortal } from 'react-dom';
 import type { Role, Square } from 'chessops/types';
 import { makeSquare, parseSquare } from 'chessops/util';
 import { PieceSprite } from './pieces';
@@ -56,11 +57,32 @@ export function Board(props: BoardProps) {
   const [drawing, setDrawing] = useState<{ from: Square; to: Square; color: ShapeColor } | null>(null);
   const [promotion, setPromotion] = useState<{ from: Square; to: Square } | null>(null);
 
-  useEffect(() => {
+  // Capture on the board, whose DOM node survives piece and position updates.
+  const pointer = useRef<{ id: number; button: number; element: Element; startX: number; startY: number } | null>(null);
+  const releasePointer = useCallback(() => {
+    const active = pointer.current;
+    pointer.current = null;
+    if (active?.element.hasPointerCapture?.(active.id)) active.element.releasePointerCapture(active.id);
+  }, []);
+  const cancelInteraction = useCallback(() => {
+    releasePointer();
     setSelected(null);
-    setPromotion(null);
     setDrag(null);
-  }, [fen]);
+    setDrawing(null);
+    setPromotion(null);
+  }, [releasePointer]);
+
+  useEffect(cancelInteraction, [fen, orientation, canMove, cancelInteraction]);
+  useEffect(() => {
+    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') cancelInteraction(); };
+    window.addEventListener('blur', cancelInteraction);
+    window.addEventListener('keydown', escape);
+    return () => {
+      window.removeEventListener('blur', cancelInteraction);
+      window.removeEventListener('keydown', escape);
+      releasePointer();
+    };
+  }, [cancelInteraction, releasePointer]);
 
   const flip = orientation === 'black';
   const toXY = useCallback((sq: Square) => {
@@ -105,21 +127,32 @@ export function Board(props: BoardProps) {
     if (move) onMove?.(uciOf(pos, move));
   };
 
+  const capturePointer = (e: ReactPointerEvent) => {
+    pointer.current = { id: e.pointerId, button: e.button, element: e.currentTarget, startX: e.clientX, startY: e.clientY };
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+  const movedFromPickup = (x: number, y: number) => {
+    const active = pointer.current;
+    return !!active && Math.hypot(x - active.startX, y - active.startY) > 4;
+  };
+
   const onPointerDown = (e: ReactPointerEvent) => {
-    if (promotion) return;
+    if (promotion || pointer.current) return;
     const sq = squareAt(e.clientX, e.clientY);
     if (sq === null) return;
     if (e.button === 2) {
       e.preventDefault();
+      capturePointer(e);
       setDrawing({ from: sq, to: sq, color: shapeColor(e) });
       return;
     }
     if (e.button !== 0) return;
     if (selected !== null && selected !== sq && attempt(selected, sq)) return;
     if (ownPiece(sq)) {
+      e.preventDefault();
+      capturePointer(e);
       setSelected(sq);
       setDrag({ from: sq, x: e.clientX, y: e.clientY, moved: false });
-      (e.target as Element).setPointerCapture?.(e.pointerId);
     } else {
       setSelected(null);
       if (shapes.length) onShapes?.([]);
@@ -127,7 +160,8 @@ export function Board(props: BoardProps) {
   };
 
   const onPointerMove = (e: ReactPointerEvent) => {
-    if (drag) setDrag({ ...drag, x: e.clientX, y: e.clientY, moved: drag.moved || Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 4 });
+    if (pointer.current?.id !== e.pointerId) return;
+    if (drag) setDrag({ ...drag, x: e.clientX, y: e.clientY, moved: drag.moved || movedFromPickup(e.clientX, e.clientY) });
     if (drawing) {
       const sq = squareAt(e.clientX, e.clientY);
       if (sq !== null && sq !== drawing.to) setDrawing({ ...drawing, to: sq });
@@ -135,7 +169,11 @@ export function Board(props: BoardProps) {
   };
 
   const onPointerUp = (e: ReactPointerEvent) => {
+    if (pointer.current?.id !== e.pointerId || pointer.current.button !== e.button) return;
+    const moved = drag?.moved || movedFromPickup(e.clientX, e.clientY);
+    releasePointer();
     if (drawing && e.button === 2) {
+      if (squareAt(e.clientX, e.clientY) === null) { setDrawing(null); return; }
       const from = makeSquare(drawing.from);
       const to = makeSquare(drawing.to);
       const existing = shapes.find((s) => s.from === from && s.to === to);
@@ -148,7 +186,10 @@ export function Board(props: BoardProps) {
       const target = squareAt(e.clientX, e.clientY);
       const from = drag.from;
       setDrag(null);
-      if (target !== null && target !== from && drag.moved) attempt(from, target);
+      if (moved) {
+        setSelected(null);
+        if (target !== null && target !== from) attempt(from, target);
+      }
     }
   };
 
@@ -228,6 +269,8 @@ export function Board(props: BoardProps) {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={(e) => { if (pointer.current?.id === e.pointerId) cancelInteraction(); }}
+        onLostPointerCapture={(e) => { if (pointer.current?.id === e.pointerId) cancelInteraction(); }}
         onContextMenu={(e) => e.preventDefault()}
       >
         <div className="squares">{squares}</div>
@@ -268,13 +311,17 @@ export function Board(props: BoardProps) {
           {Array.from({ length: 8 }, (_, i) => <span key={i}>{'abcdefgh'[flip ? 7 - i : i]}</span>)}
         </div>
       )}
-      {dragPiece && boardRect && (
+      {dragPiece && boardRect && createPortal(
         <div
           className="drag-ghost"
+          aria-hidden="true"
           style={{ width: boardRect.width / 8, height: boardRect.height / 8, left: drag!.x - boardRect.width / 16, top: drag!.y - boardRect.height / 16 }}
         >
           <PieceSprite role={dragPiece.role} color={dragPiece.color} />
-        </div>
+        </div>,
+        // clientX/Y and the board rectangle are viewport pixels. Keep the ghost
+        // outside .app so its CSS zoom cannot scale those coordinates a second time.
+        document.body,
       )}
     </div>
   );

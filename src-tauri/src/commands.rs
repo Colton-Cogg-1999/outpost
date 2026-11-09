@@ -364,10 +364,10 @@ pub async fn analysis_start(state: State<'_, AppState>, engine_id: Option<String
 #[tauri::command]
 pub async fn analysis_stop(state: State<'_, AppState>, engine_id: Option<String>) -> CmdResult<()> {
     match engine_id {
-        Some(id) => state.engines.stop(&id).await,
+        Some(id) => state.engines.shutdown(&id).await,
         None => {
             for id in state.engines.running_ids().await {
-                state.engines.stop(&id).await;
+                state.engines.shutdown(&id).await;
             }
         }
     }
@@ -471,6 +471,13 @@ pub fn game_delete(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
 }
 
 #[tauri::command]
+pub fn games_clear_history(state: State<'_, AppState>) -> CmdResult<usize> {
+    let jobs = state.jobs.flags.lock().unwrap();
+    if !jobs.is_empty() { return fail("Finish or stop the active import, review, or generation before clearing history."); }
+    Ok(games::clear_history(&state.db)?)
+}
+
+#[tauri::command]
 pub fn game_favorite(state: State<'_, AppState>, id: i64, favorite: bool) -> CmdResult<()> {
     Ok(games::set_favorite(&state.db, id, favorite)?)
 }
@@ -485,6 +492,25 @@ pub fn accounts_list(state: State<'_, AppState>) -> CmdResult<Vec<Value>> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+#[tauri::command]
+pub async fn games_history(state: State<'_, AppState>, job_id: u64, request: crate::import::history::Request) -> CmdResult<crate::import::history::Page> {
+    let cancel = state.jobs.start(job_id);
+    let result = crate::import::history::browse(&state.http, request, &cancel).await;
+    state.jobs.finish(job_id);
+    Ok(result?)
+}
+
+#[tauri::command]
+pub fn game_import_selected(state: State<'_, AppState>, mut game: games::NewGame) -> CmdResult<Value> {
+    let parsed = crate::chess::pgn::parse_one(&game.pgn).ok_or_else(|| anyhow::anyhow!("Invalid PGN."))?;
+    if parsed.error.is_some() || parsed.moves_uci.is_empty() { return Err(anyhow::anyhow!("Invalid game.").into()); }
+    game.pgn = parsed.pgn.clone();
+    game.fingerprint = parsed.fingerprint();
+    let inserted = games::insert(&state.db, &game)?;
+    let id = match inserted { games::Inserted::New(id) | games::Inserted::Duplicate(id) => id };
+    Ok(json!({"id": id, "duplicate": matches!(inserted, games::Inserted::Duplicate(_))}))
 }
 
 #[tauri::command]
@@ -575,6 +601,7 @@ pub async fn tactics_scan(
     };
     let limits = tactics::generator::Limits::default();
     let mut outcome: anyhow::Result<()> = Ok(());
+    let mut completed = 0;
     for (index, id) in ids.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             break;
@@ -596,9 +623,10 @@ pub async fn tactics_scan(
         })
         .await;
         match result {
-            Ok(n) => summary.found += n,
+            Ok(n) => { summary.found += n; completed += 1; },
             Err(_) if cancel.load(Ordering::Relaxed) => break,
             Err(e) => {
+                summary.failed += 1;
                 tracing::warn!("tactic scan of game {id} failed: {e:#}");
                 if !handle.is_alive() {
                     outcome = Err(e);
@@ -611,7 +639,9 @@ pub async fn tactics_scan(
     state.jobs.finish(job_id);
     outcome?;
     summary.finished = true;
-    summary.game_index = ids.len();
+    summary.game_index = completed;
+    summary.games = completed;
+    summary.cancelled = cancel.load(Ordering::Relaxed);
     let _ = on_progress.send(summary.clone());
     Ok(summary)
 }

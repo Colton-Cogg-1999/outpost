@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { useStore } from './store';
 import { reviewByNode, evalSeries } from './views/analysis';
 import { mainline } from './chess/tree';
-import type { GameReport } from './lib/types';
+import type { GameReport, GameSummary } from './lib/types';
 
 const s = () => useStore.getState();
 
@@ -57,5 +57,35 @@ describe('analysis state', () => {
     s().promoteVariation(s().current);
     expect(reviewByNode(s().tree, report).size).toBe(2);
     expect(mainline(s().tree)).toHaveLength(4);
+  });
+});
+
+describe('quiet preference migration', () => {
+  it('migrates legacy defaults once while preserving later choices', async () => {
+    const { migratePrefs } = await import('./store');
+    const migrated = migratePrefs({ multipv: 3, arrowCount: 3, depthLimit: null, crt: 0.35 });
+    expect(migrated).toMatchObject({ multipv: 1, arrowCount: 1, depthLimit: 16, crt: 0 });
+    expect(migratePrefs({ ...migrated, multipv: 3, depthLimit: null })).toMatchObject({ multipv: 3, depthLimit: null });
+  });
+});
+
+
+describe('imported player perspective', () => {
+  it('faces the imported account, independently of manual flips', () => {
+    const game = { id: 7, account: 'MY-account', white: 'Opponent', black: 'my-Account' } as GameSummary;
+    s().loadPgn('[White "Opponent"]\n[Black "my-Account"]\n\n1. e4 e5 *', { game, gameId: 7 });
+    expect(s().orientation).toBe('black');
+    expect(s().playerColor).toBe('black');
+    s().flip();
+    expect(s().orientation).toBe('white');
+    expect(s().playerColor).toBe('black');
+    s().loadTree(s().tree, { game });
+    expect(s().orientation).toBe('black');
+    s().loadTree(s().tree, { game: { ...game, account: 'opponent' } });
+    expect(s().orientation).toBe('white');
+    expect(s().playerColor).toBe('white');
+    s().newGame();
+    expect(s().playerColor).toBeNull();
+    expect(s().orientation).toBe('white');
   });
 });

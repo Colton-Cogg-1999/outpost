@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 
 /// Everything needed to store one game. Built from a validated `ParsedGame` plus any
 /// metadata the source API provides beyond the PGN headers.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NewGame {
     pub source: String,
     pub source_id: Option<String>,
@@ -275,10 +276,20 @@ pub fn get(db: &Db, id: i64) -> Result<GameDetail> {
 }
 
 pub fn update_pgn(db: &Db, id: i64, game: &ParsedGame) -> Result<()> {
-    db.conn().execute(
+    let mut conn = db.conn();
+    let tx = conn.transaction()?;
+    let old: String = tx.query_row("SELECT pgn FROM games WHERE id=?1", [id], |r| r.get(0))?;
+    let changed = crate::chess::pgn::parse_one(&old).is_none_or(|p| p.moves_uci != game.moves_uci || p.start_fen != game.start_fen);
+    tx.execute(
         "UPDATE games SET pgn=?2, ply_count=?3, result=?4 WHERE id=?1",
         params![id, game.pgn, game.moves_uci.len() as i64, game.result],
     )?;
+    if changed {
+        tx.execute("DELETE FROM analyses WHERE game_id=?1", [id])?;
+        tx.execute("DELETE FROM tactics WHERE game_id=?1", [id])?;
+        tx.execute("DELETE FROM tactic_scans WHERE game_id=?1", [id])?;
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -392,4 +403,14 @@ mod tests {
         assert_eq!(speed_from_time_control("1/86400"), Some("correspondence"));
         assert_eq!(speed_from_time_control("-"), None);
     }
+}
+
+/// Explicit library clearing: settings, engines and saved conversations survive.
+pub fn clear_history(db: &Db) -> Result<usize> {
+    let mut conn = db.conn();
+    let tx = conn.transaction()?;
+    let count = tx.execute("DELETE FROM games", [])?;
+    tx.execute("DELETE FROM accounts", [])?;
+    tx.commit()?;
+    Ok(count)
 }

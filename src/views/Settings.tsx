@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import { AiView } from './AiView';
 import { useStore } from '../store';
-import { Toggle } from '../components/ui';
+import { Icon, Toggle } from '../components/ui';
 import { api, errorText } from '../lib/ipc';
 import type { AppInfo, EngineDefaults, ReviewSettings } from '../lib/types';
 
@@ -35,7 +36,9 @@ export function Settings({ info }: { info: AppInfo | null }) {
           <h1>Settings</h1>
           <p className="lead">Stored locally in OUTPOST's database. No account, no sync, no telemetry.</p>
         </div>
+        <button className="btn" onClick={() => useStore.getState().setView('engines')}><Icon name="engines" />Manage engines</button>
       </div>
+      <details className="agent-settings box" open><summary><h2>Agent</h2></summary><AiView embedded /></details>
       <div className="cards">
         <div className="box">
           <h3>Appearance</h3>
